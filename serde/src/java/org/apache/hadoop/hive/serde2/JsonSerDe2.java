@@ -66,9 +66,9 @@ import org.slf4j.LoggerFactory;
 @SerDeSpec(schemaProps = {serdeConstants.LIST_COLUMNS,
     serdeConstants.LIST_COLUMN_TYPES,
     serdeConstants.TIMESTAMP_FORMATS })
-public class JsonSerDe extends AbstractSerDe {
+public class JsonSerDe2 extends AbstractSerDe {
 
-  private static final Logger LOG = LoggerFactory.getLogger(JsonSerDe.class);
+  private static final Logger LOG = LoggerFactory.getLogger(JsonSerDe2.class);
   private List<String> columnNames;
 
   private HiveJsonStructReader structReader;
@@ -125,7 +125,6 @@ public class JsonSerDe extends AbstractSerDe {
   @Override
   public Object deserialize(Writable blob) throws SerDeException {
     final Text t = (Text) blob;
-    // If line is empty, return empty struct?
     try {
       return structReader.parseStruct(
           new ByteArrayInputStream((t.getBytes()), 0, t.getLength()));

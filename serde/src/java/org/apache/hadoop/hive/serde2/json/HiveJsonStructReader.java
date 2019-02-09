@@ -23,9 +23,11 @@ import java.io.InputStream;
 import java.nio.charset.CharacterCodingException;
 import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Map.Entry;
 import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -53,20 +55,23 @@ import org.apache.hive.common.util.TimestampParser;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import com.fasterxml.jackson.core.JsonFactory;
 import com.fasterxml.jackson.core.JsonParseException;
-import com.fasterxml.jackson.core.JsonParser;
-import com.fasterxml.jackson.core.JsonToken;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.JsonNodeType;
+import com.fasterxml.jackson.databind.node.TextNode;
+import com.google.common.base.Preconditions;
 
 public class HiveJsonStructReader {
 
-  private static final Logger LOG = LoggerFactory.getLogger(HiveJsonStructReader.class);
+  private static final Logger LOG =
+      LoggerFactory.getLogger(HiveJsonStructReader.class);
 
   private ObjectInspector oi;
-  private JsonFactory factory;
 
+  private final ObjectMapper objectMapper = new ObjectMapper();
 
-  Set<String> reportedUnknownFieldNames = new HashSet<>();
+  private final Set<String> reportedUnknownFieldNames = new HashSet<>();
 
   private static boolean ignoreUnknownFields;
   private static boolean hiveColIndexParsing;
@@ -81,137 +86,155 @@ public class HiveJsonStructReader {
   public HiveJsonStructReader(TypeInfo t, TimestampParser tsParser) {
     this.tsParser = tsParser;
     oi = TypeInfoUtils.getStandardWritableObjectInspectorFromTypeInfo(t);
-    factory = new JsonFactory();
   }
 
-  public Object parseStruct(String text) throws JsonParseException, IOException, SerDeException {
-    JsonParser parser = factory.createParser(text);
-    return parseInternal(parser);
-  }
-
-  public Object parseStruct(InputStream is) throws JsonParseException, IOException, SerDeException {
-    JsonParser parser = factory.createParser(is);
-    return parseInternal(parser);
-  }
-
-  private Object parseInternal(JsonParser parser) throws SerDeException {
-    try {
-      parser.nextToken();
-      Object res = parseDispatcher(parser, oi);
-      return res;
-    } catch (Exception e) {
-      String locationStr = parser.getCurrentLocation().getLineNr() + "," + parser.getCurrentLocation().getColumnNr();
-      throw new SerDeException("at[" + locationStr + "]: " + e.getMessage(), e);
-    }
-  }
-
-  private Object parseDispatcher(JsonParser parser, ObjectInspector oi)
+  public Object parseStruct(String text)
       throws JsonParseException, IOException, SerDeException {
+    final JsonNode rootNode = this.objectMapper.readValue(text, JsonNode.class);
+    return visitNode(rootNode, this.oi);
+  }
+
+  public Object parseStruct(InputStream is)
+      throws JsonParseException, IOException, SerDeException {
+    final JsonNode rootNode = this.objectMapper.readValue(is, JsonNode.class);
+    return visitNode(rootNode, this.oi);
+  }
+
+  private Object visitNode(final JsonNode rootNode, ObjectInspector oi)
+      throws SerDeException {
 
     switch (oi.getCategory()) {
     case PRIMITIVE:
-      return parsePrimitive(parser, (PrimitiveObjectInspector) oi);
+      return visitPrimativeNode(rootNode, oi);
     case LIST:
-      return parseList(parser, (ListObjectInspector) oi);
+      return visitArrayNode(rootNode, oi);
     case STRUCT:
-      return parseStruct(parser, (StructObjectInspector) oi);
+      return visitStructNode(rootNode, oi);
     case MAP:
-      return parseMap(parser, (MapObjectInspector) oi);
+      return visitMapNode(rootNode, oi);
     default:
-      throw new SerDeException("parsing of: " + oi.getCategory() + " is not handled");
+      throw new SerDeException(
+          "Parsing of: " + oi.getCategory() + " is not supported");
     }
+
   }
 
-  private Object parseMap(JsonParser parser, MapObjectInspector oi) throws IOException, SerDeException {
+  private Object visitMapNode(final JsonNode rootNode, final ObjectInspector oi)
+      throws SerDeException {
+    Preconditions.checkArgument(JsonNodeType.OBJECT == rootNode.getNodeType());
 
-    if (parser.getCurrentToken() == JsonToken.VALUE_NULL) {
-      parser.nextToken();
-      return null;
+    final Map<Object, Object> ret = new LinkedHashMap<>();
+
+    final ObjectInspector mapKeyInspector =
+        ((MapObjectInspector) oi).getMapKeyObjectInspector();
+
+    final ObjectInspector mapValueInspector =
+        ((MapObjectInspector) oi).getMapValueObjectInspector();
+
+    if (!(mapKeyInspector instanceof PrimitiveObjectInspector)) {
+      throw new SerDeException("Map key must be a primitive");
     }
 
-    Map<Object, Object> ret = new LinkedHashMap<>();
-
-    if (parser.getCurrentToken() != JsonToken.START_OBJECT) {
-      throw new SerDeException("struct expected");
-    }
-
-    if (!(oi.getMapKeyObjectInspector() instanceof PrimitiveObjectInspector)) {
-      throw new SerDeException("map key must be a primitive");
-    }
-    PrimitiveObjectInspector keyOI = (PrimitiveObjectInspector) oi.getMapKeyObjectInspector();
-    ObjectInspector valOI = oi.getMapValueObjectInspector();
-
-    JsonToken currentToken = parser.nextToken();
-    while (currentToken != null && currentToken != JsonToken.END_OBJECT) {
-
-      if (currentToken != JsonToken.FIELD_NAME) {
-        throw new SerDeException("unexpected token: " + currentToken);
-      }
-
-      Object key = parseMapKey(parser, keyOI);
-      Object val = parseDispatcher(parser, valOI);
+    final Iterator<Entry<String, JsonNode>> it = rootNode.fields();
+    while (it.hasNext()) {
+      final Entry<String, JsonNode> field = it.next();
+      final Object key =
+          visitNode(new TextNode(field.getKey()), mapKeyInspector);
+      final Object val = visitNode(field.getValue(), mapValueInspector);
       ret.put(key, val);
+    }
 
-      currentToken = parser.getCurrentToken();
-    }
-    if (currentToken != null) {
-      parser.nextToken();
-    }
     return ret;
-
   }
 
-  private Object parseStruct(JsonParser parser, StructObjectInspector oi)
-      throws JsonParseException, IOException, SerDeException {
+  private Object visitStructNode(final JsonNode rootNode,
+      final ObjectInspector oi) throws SerDeException {
 
-    Object[] ret = new Object[oi.getAllStructFieldRefs().size()];
+    Preconditions.checkArgument(JsonNodeType.OBJECT == rootNode.getNodeType());
 
-    if (parser.getCurrentToken() == JsonToken.VALUE_NULL) {
-      parser.nextToken();
-      return null;
-    }
-    if (parser.getCurrentToken() != JsonToken.START_OBJECT) {
-      throw new SerDeException("struct expected");
-    }
-    JsonToken currentToken = parser.nextToken();
-    while (currentToken != null && currentToken != JsonToken.END_OBJECT) {
+    final Object[] ret =
+        new Object[((StructObjectInspector) oi).getAllStructFieldRefs().size()];
 
-      switch (currentToken) {
-      case FIELD_NAME:
-        String name = parser.getCurrentName();
-        try {
-          StructField field = null;
-          try {
-            field = getStructField(oi, name);
-          } catch (RuntimeException e) {
-            if (ignoreUnknownFields) {
-              if (!reportedUnknownFieldNames.contains(name)) {
-                LOG.warn("ignoring field:" + name);
-                reportedUnknownFieldNames.add(name);
-              }
-              parser.nextToken();
-              skipValue(parser);
-              break;
-            }
-          }
-          if (field == null) {
-            throw new SerDeException("undeclared field");
-          }
-          parser.nextToken();
-          ret[field.getFieldID()] = parseDispatcher(parser, field.getFieldObjectInspector());
-        } catch (Exception e) {
-          throw new SerDeException("struct field " + name + ": " + e.getMessage(), e);
-        }
-        break;
-      default:
-        throw new SerDeException("unexpected token: " + currentToken);
-      }
-      currentToken = parser.getCurrentToken();
+    final Iterator<Entry<String, JsonNode>> it = rootNode.fields();
+    while (it.hasNext()) {
+      final Entry<String, JsonNode> field = it.next();
+      StructField structField =
+          getStructField((StructObjectInspector) oi, field.getKey());
+      ret[structField.getFieldID()] =
+          visitNode(field.getValue(), structField.getFieldObjectInspector());
     }
-    if (currentToken != null) {
-      parser.nextToken();
-    }
+
     return ret;
+  }
+
+  private Object visitArrayNode(final JsonNode rootNode, ObjectInspector oi)
+      throws SerDeException {
+    Preconditions.checkArgument(JsonNodeType.ARRAY == rootNode.getNodeType());
+
+    final ObjectInspector eOI =
+        ((ListObjectInspector) oi).getListElementObjectInspector();
+
+    final List<Object> ret = new ArrayList<>();
+    final Iterator<JsonNode> it = rootNode.elements();
+
+    while (it.hasNext()) {
+      final JsonNode element = it.next();
+      ret.add(visitNode(element, eOI));
+    }
+
+    return ret;
+  }
+
+  private Object visitPrimativeNode(final JsonNode rootNode,
+      final ObjectInspector oi) throws SerDeException {
+    final PrimitiveTypeInfo typeInfo =
+        ((PrimitiveObjectInspector) oi).getTypeInfo();
+    final String value = rootNode.asText();
+    if (writeablePrimitives) {
+      Converter c = ObjectInspectorConverters.getConverter(
+          PrimitiveObjectInspectorFactory.javaStringObjectInspector, oi);
+      return c.convert(value);
+    }
+
+    switch (typeInfo.getPrimitiveCategory()) {
+    case INT:
+      return Integer.valueOf(value);
+    case BYTE:
+      return Byte.valueOf(value);
+    case SHORT:
+      return Short.valueOf(value);
+    case LONG:
+      return Long.valueOf(value);
+    case BOOLEAN:
+      return Boolean.valueOf(value);
+    case FLOAT:
+      return Float.valueOf(value);
+    case DOUBLE:
+      return Double.valueOf(value);
+    case STRING:
+      return value;
+    case BINARY:
+      // TODO: Base-64
+      try {
+        String t = Text.decode(value.getBytes(), 0, value.getBytes().length);
+        return t.getBytes();
+      } catch (CharacterCodingException e) {
+        throw new SerDeException("Error generating json binary type from object.", e);
+      }
+    case DATE:
+      return Date.valueOf(value);
+    case TIMESTAMP:
+      return tsParser.parseTimestamp(value);
+    case DECIMAL:
+      return HiveDecimal.create(value);
+    case VARCHAR:
+      return new HiveVarchar(value, ((BaseCharTypeInfo) typeInfo).getLength());
+    case CHAR:
+      return new HiveChar(value, ((BaseCharTypeInfo) typeInfo).getLength());
+    default:
+      throw new SerDeException("Could not convert from string to map type "
+          + typeInfo.getTypeName());
+    }
   }
 
   private StructField getStructField(StructObjectInspector oi, String name) {
@@ -221,7 +244,8 @@ public class HiveJsonStructReader {
         return oi.getAllStructFieldRefs().get(colIndex);
       }
     }
-    // FIXME: linear scan inside the below method...get a map here or something..
+    // FIXME: linear scan inside the below method...get a map here or
+    // something..
     return oi.getStructFieldRef(name);
   }
 
@@ -236,151 +260,6 @@ public class HiveJsonStructReader {
       return -1;
     } else {
       return Integer.parseInt(m.group(1));
-    }
-  }
-
-  private static void skipValue(JsonParser parser) throws JsonParseException, IOException {
-
-    int array = 0;
-    int object = 0;
-    do {
-      JsonToken currentToken = parser.getCurrentToken();
-      if(currentToken == JsonToken.START_ARRAY) {
-        array++;
-      }
-      if (currentToken == JsonToken.END_ARRAY) {
-        array--;
-      }
-      if (currentToken == JsonToken.START_OBJECT) {
-        object++;
-      }
-      if (currentToken == JsonToken.END_OBJECT) {
-        object--;
-      }
-
-      parser.nextToken();
-
-    } while (array > 0 || object > 0);
-
-  }
-
-  private Object parseList(JsonParser parser, ListObjectInspector oi)
-      throws JsonParseException, IOException, SerDeException {
-    List<Object> ret = new ArrayList<>();
-
-    if (parser.getCurrentToken() == JsonToken.VALUE_NULL) {
-      parser.nextToken();
-      return null;
-    }
-
-    if (parser.getCurrentToken() != JsonToken.START_ARRAY) {
-      throw new SerDeException("array expected");
-    }
-    ObjectInspector eOI = oi.getListElementObjectInspector();
-    JsonToken currentToken = parser.nextToken();
-    try {
-      while (currentToken != null && currentToken != JsonToken.END_ARRAY) {
-        ret.add(parseDispatcher(parser, eOI));
-        currentToken = parser.getCurrentToken();
-      }
-    } catch (Exception e) {
-      throw new SerDeException("array: " + e.getMessage(), e);
-    }
-
-    currentToken = parser.nextToken();
-
-    return ret;
-  }
-
-  private Object parsePrimitive(JsonParser parser, PrimitiveObjectInspector oi)
-      throws SerDeException, IOException {
-    JsonToken currentToken = parser.getCurrentToken();
-    if (currentToken == null) {
-      return null;
-    }
-    try {
-      switch (parser.getCurrentToken()) {
-      case VALUE_FALSE:
-      case VALUE_TRUE:
-      case VALUE_NUMBER_INT:
-      case VALUE_NUMBER_FLOAT:
-      case VALUE_STRING:
-        return getObjectOfCorrespondingPrimitiveType(parser.getValueAsString(), oi);
-      case VALUE_NULL:
-        return null;
-      default:
-        throw new SerDeException("unexpected token type: " + currentToken);
-      }
-    } finally {
-      parser.nextToken();
-
-    }
-  }
-
-  private Object getObjectOfCorrespondingPrimitiveType(String s, PrimitiveObjectInspector oi)
-      throws IOException {
-    PrimitiveTypeInfo typeInfo = oi.getTypeInfo();
-    if (writeablePrimitives) {
-      Converter c = ObjectInspectorConverters.getConverter(PrimitiveObjectInspectorFactory.javaStringObjectInspector, oi);
-      return c.convert(s);
-    }
-
-    switch (typeInfo.getPrimitiveCategory()) {
-    case INT:
-      return Integer.valueOf(s);
-    case BYTE:
-      return Byte.valueOf(s);
-    case SHORT:
-      return Short.valueOf(s);
-    case LONG:
-      return Long.valueOf(s);
-    case BOOLEAN:
-      return (s.equalsIgnoreCase("true"));
-    case FLOAT:
-      return Float.valueOf(s);
-    case DOUBLE:
-      return Double.valueOf(s);
-    case STRING:
-      return s;
-    case BINARY:
-      try {
-        String t = Text.decode(s.getBytes(), 0, s.getBytes().length);
-        return t.getBytes();
-      } catch (CharacterCodingException e) {
-        LOG.warn("Error generating json binary type from object.", e);
-        return null;
-      }
-    case DATE:
-      return Date.valueOf(s);
-    case TIMESTAMP:
-      return tsParser.parseTimestamp(s);
-    case DECIMAL:
-      return HiveDecimal.create(s);
-    case VARCHAR:
-      return new HiveVarchar(s, ((BaseCharTypeInfo) typeInfo).getLength());
-    case CHAR:
-      return new HiveChar(s, ((BaseCharTypeInfo) typeInfo).getLength());
-    }
-    throw new IOException("Could not convert from string to map type " + typeInfo.getTypeName());
-  }
-
-  private Object parseMapKey(JsonParser parser, PrimitiveObjectInspector oi) throws SerDeException, IOException {
-    JsonToken currentToken = parser.getCurrentToken();
-    if (currentToken == null) {
-      return null;
-    }
-    try {
-      switch (parser.getCurrentToken()) {
-      case FIELD_NAME:
-        return getObjectOfCorrespondingPrimitiveType(parser.getValueAsString(), oi);
-      case VALUE_NULL:
-        return null;
-      default:
-        throw new SerDeException("unexpected token type: " + currentToken);
-      }
-    } finally {
-      parser.nextToken();
-
     }
   }
 
