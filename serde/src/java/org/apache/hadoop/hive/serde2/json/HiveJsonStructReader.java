@@ -21,7 +21,10 @@ package org.apache.hadoop.hive.serde2.json;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.CharacterCodingException;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Base64;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
@@ -67,36 +70,43 @@ public class HiveJsonStructReader {
   private static final Logger LOG =
       LoggerFactory.getLogger(HiveJsonStructReader.class);
 
-  private ObjectInspector oi;
+  private static final String DEFAULT_BINARY_DECODING = "default";
 
   private final ObjectMapper objectMapper = new ObjectMapper();
 
-  private final Set<String> reportedUnknownFieldNames = new HashSet<>();
+  private final Map<String, StructField> discoveredFields = new HashMap<>();
+  private final Set<String> discoveredUnknownFields = new HashSet<>();
 
-  private static boolean ignoreUnknownFields;
-  private static boolean hiveColIndexParsing;
-  private boolean writeablePrimitives;
-
+  private final ObjectInspector oi;
   private TimestampParser tsParser;
+
+  private boolean ignoreUnknownFields;
+  private boolean hiveColIndexParsing;
+  private boolean writeablePrimitives;
+  private String binaryEncodingType;
 
   public HiveJsonStructReader(TypeInfo t) {
     this(t, new TimestampParser());
   }
 
   public HiveJsonStructReader(TypeInfo t, TimestampParser tsParser) {
+    this.ignoreUnknownFields = false;
+    this.writeablePrimitives = false;
+    this.hiveColIndexParsing = false;
+    this.binaryEncodingType = DEFAULT_BINARY_DECODING;
     this.tsParser = tsParser;
-    oi = TypeInfoUtils.getStandardWritableObjectInspectorFromTypeInfo(t);
+    this.oi = TypeInfoUtils.getStandardWritableObjectInspectorFromTypeInfo(t);
   }
 
   public Object parseStruct(String text)
       throws JsonParseException, IOException, SerDeException {
-    final JsonNode rootNode = this.objectMapper.readValue(text, JsonNode.class);
+    final JsonNode rootNode = this.objectMapper.readTree(text);
     return visitNode(rootNode, this.oi);
   }
 
   public Object parseStruct(InputStream is)
       throws JsonParseException, IOException, SerDeException {
-    final JsonNode rootNode = this.objectMapper.readValue(is, JsonNode.class);
+    final JsonNode rootNode = this.objectMapper.readTree(is);
     return visitNode(rootNode, this.oi);
   }
 
@@ -158,10 +168,15 @@ public class HiveJsonStructReader {
     final Iterator<Entry<String, JsonNode>> it = rootNode.fields();
     while (it.hasNext()) {
       final Entry<String, JsonNode> field = it.next();
-      StructField structField =
-          getStructField((StructObjectInspector) oi, field.getKey());
-      ret[structField.getFieldID()] =
-          visitNode(field.getValue(), structField.getFieldObjectInspector());
+      final String fieldName = field.getKey();
+      final JsonNode childNode = field.getValue();
+      final StructField structField =
+          getStructField((StructObjectInspector) oi, fieldName);
+      if (structField != null) {
+        final Object childValue =
+            visitNode(childNode, structField.getFieldObjectInspector());
+        ret[structField.getFieldID()] = childValue;
+      }
     }
 
     return ret;
@@ -214,13 +229,7 @@ public class HiveJsonStructReader {
     case STRING:
       return value;
     case BINARY:
-      // TODO: Base-64
-      try {
-        String t = Text.decode(value.getBytes(), 0, value.getBytes().length);
-        return t.getBytes();
-      } catch (CharacterCodingException e) {
-        throw new SerDeException("Error generating json binary type from object.", e);
-      }
+      return getByteValue(value);
     case DATE:
       return Date.valueOf(value);
     case TIMESTAMP:
@@ -237,16 +246,68 @@ public class HiveJsonStructReader {
     }
   }
 
-  private StructField getStructField(StructObjectInspector oi, String name) {
+  private byte[] getByteValue(final String byteText) throws SerDeException {
+    switch (this.binaryEncodingType) {
+    case "default":
+      try {
+        return Text.decode(byteText.getBytes(), 0, byteText.getBytes().length)
+            .getBytes(StandardCharsets.UTF_8);
+      } catch (CharacterCodingException e) {
+        throw new SerDeException(
+            "Error generating json binary type from object.", e);
+      }
+    case "base64":
+      return Base64.getDecoder().decode(byteText);
+
+    default:
+      throw new SerDeException(
+          "Decoded type not available: " + this.binaryEncodingType);
+    }
+  }
+
+  private StructField getStructField(final StructObjectInspector oi,
+      final String fieldName) throws SerDeException {
+
+    // Ignore the field if it has been ignored before
+    if (this.discoveredUnknownFields.contains(fieldName)) {
+      return null;
+    }
+
+    // Return from cache if the field has already been discovered
+    StructField structField = this.discoveredFields.get(fieldName);
+    if (structField != null) {
+      return structField;
+    }
+
+    // Otherwise attempt to discover the field
     if (hiveColIndexParsing) {
-      int colIndex = getColIndex(name);
+      int colIndex = getColIndex(fieldName);
       if (colIndex >= 0) {
-        return oi.getAllStructFieldRefs().get(colIndex);
+        structField = oi.getAllStructFieldRefs().get(colIndex);
       }
     }
-    // FIXME: linear scan inside the below method...get a map here or
-    // something..
-    return oi.getStructFieldRef(name);
+    if (structField == null) {
+      try {
+        structField = oi.getStructFieldRef(fieldName);
+      } catch (Exception e) {
+        // No such field
+      }
+    }
+    if (structField != null) {
+      // cache it for next time
+      this.discoveredFields.put(fieldName, structField);
+    } else {
+      // Tried everything and did not discover this field
+      if (this.ignoreUnknownFields) {
+        if (this.discoveredUnknownFields.add(fieldName)) {
+          LOG.warn("Discovered unknown field: {}. Ignoring.", fieldName);
+        }
+      } else {
+        throw new SerDeException("No such field exists: " + fieldName);
+      }
+    }
+
+    return structField;
   }
 
   Pattern internalPattern = Pattern.compile("^_col([0-9]+)$");
@@ -263,19 +324,27 @@ public class HiveJsonStructReader {
     }
   }
 
-  public void setIgnoreUnknownFields(boolean b) {
-    ignoreUnknownFields = b;
+  public void setIgnoreUnknownFields(boolean ignore) {
+    this.ignoreUnknownFields = ignore;
   }
 
-  public void enableHiveColIndexParsing(boolean b) {
-    hiveColIndexParsing = b;
+  public void enableHiveColIndexParsing(boolean indexing) {
+    hiveColIndexParsing = indexing;
   }
 
-  public void setWritablesUsage(boolean b) {
-    writeablePrimitives = b;
+  public void setWritablesUsage(boolean writables) {
+    writeablePrimitives = writables;
   }
 
   public ObjectInspector getObjectInspector() {
     return oi;
+  }
+
+  public String getBinaryEncodingType() {
+    return binaryEncodingType;
+  }
+
+  public void setBinaryEncodingType(String encodingType) {
+    this.binaryEncodingType = encodingType;
   }
 }

@@ -116,16 +116,13 @@ public class JsonSerDe extends AbstractSerDe {
   }
 
   /**
-   * Takes JSON string in Text form, and has to return an object representation above
-   * it that's readable by the corresponding object inspector.
-   *
-   * For this implementation, since we're using the jackson parser, we can construct
-   * our own object implementation, and we use HCatRecord for it
+   * Takes JSON String in Text form, and has to return an object representation above
+   * it is readable by the corresponding object inspector.
    */
   @Override
   public Object deserialize(Writable blob) throws SerDeException {
     final Text t = (Text) blob;
-    // If line is empty, return empty struct?
+    // TODO: If line is empty, return empty struct?
     try {
       return structReader.parseStruct(
           new ByteArrayInputStream((t.getBytes()), 0, t.getLength()));
