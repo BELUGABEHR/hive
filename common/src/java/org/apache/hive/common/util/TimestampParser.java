@@ -18,166 +18,160 @@
 
 package org.apache.hive.common.util;
 
+import java.math.BigDecimal;
+import java.math.RoundingMode;
+import java.time.Instant;
+import java.time.ZoneOffset;
+import java.time.ZonedDateTime;
+import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeParseException;
+import java.time.temporal.ChronoField;
+import java.time.temporal.TemporalAccessor;
+import java.time.temporal.TemporalField;
+import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.List;
-import java.util.Optional;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
+import java.util.Collection;
+import java.util.Collections;
+import java.util.EnumSet;
+import java.util.HashSet;
 
 import org.apache.hadoop.hive.common.type.Timestamp;
-import org.joda.time.DateTime;
-import org.joda.time.LocalDateTime;
-import org.joda.time.MutableDateTime;
-import org.joda.time.DateTimeFieldType;
-import org.joda.time.chrono.ISOChronology;
 import org.joda.time.format.DateTimeFormat;
-import org.joda.time.format.DateTimeFormatter;
-import org.joda.time.format.DateTimeFormatterBuilder;
-import org.joda.time.format.DateTimeParser;
-import org.joda.time.format.DateTimeParserBucket;
-
-import javax.annotation.Nullable;
-
-import static com.google.common.base.Preconditions.checkState;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
- * Timestamp parser using Joda DateTimeFormatter. Parser accepts 0 or more date time format
- * patterns. If no format patterns are provided it will default to the normal Timestamp parsing.
- * Datetime formats are compatible with Java SimpleDateFormat. Also added special case pattern
- * "millis" to parse the string as milliseconds since Unix epoch.
- * Since this uses Joda DateTimeFormatter, this parser should be thread safe.
+ * Timestamp parser using Joda DateTimeFormatter. Parser accepts 0 or more date
+ * time format patterns. If no format patterns are provided it will default to
+ * the normal Timestamp parsing. Datetime formats are compatible with Java
+ * SimpleDateFormat. Also added special case pattern "millis" to parse the
+ * string as milliseconds since Unix epoch. Since this uses Joda
+ * DateTimeFormatter, this parser should be thread safe.
  */
 public class TimestampParser {
 
-  protected final static String[] stringArray = new String[] {};
-  protected final static String millisFormatString = "millis";
-  protected final static DateTime startingDateValue =
-      new DateTime(1970, 1, 1, 0, 0, 0, 0, ISOChronology.getInstanceUTC());
+  private final Logger LOG = LoggerFactory.getLogger(TimestampParser.class);
 
-  protected String[] formatStrings = null;
-  protected DateTimeFormatter fmt = null;
+  public final static String MILLIS_FORMAT_STR = "millis";
+  public final static String ISO_8601_FORMAT_STR = "iso8601";
+  public final static String RFC_1123_FORMAT_STR = "rfc1123";
+
+  private final Collection<DateTimeFormatter> dtFormatters;
+  private final boolean supportMillisEpoch;
 
   public TimestampParser() {
+    this(Collections.emptyList());
   }
 
-  public TimestampParser(TimestampParser tsParser) {
-    this(tsParser.formatStrings == null ?
-        null : Arrays.copyOf(tsParser.formatStrings, tsParser.formatStrings.length));
+  public TimestampParser(final String[] formatStrings) {
+    this(Arrays.asList(formatStrings));
   }
 
-  public TimestampParser(List<String> formatStrings) {
-    this(formatStrings == null ? null : formatStrings.toArray(stringArray));
-  }
+  /**
+   * Create a timestamp parser with one ore more date patterns. When parsing,
+   * the first pattern in the list is selected for parsing. If it fails, the
+   * next is chosen, and so on. If none of these patterns succeeds, then the
+   * output of the pattern that made the greatest progress is returned.
+   *
+   * @see DateTimeFormat
+   * @param patterns a collection of timestamp formats
+   */
+  public TimestampParser(final Collection<String> patterns) {
+    final Collection<String> patternSet = new HashSet<>(patterns);
+    this.supportMillisEpoch = patternSet.remove(MILLIS_FORMAT_STR);
 
-  public TimestampParser(String[] formatStrings) {
-    this.formatStrings = formatStrings;
+    if (patternSet.isEmpty()) {
+      this.dtFormatters = Collections.emptyList();
+      return;
+    }
 
-    // create formatter that includes all of the input patterns
-    if (formatStrings != null && formatStrings.length > 0) {
-      DateTimeParser[] parsers = new DateTimeParser[formatStrings.length];
-      for (int idx = 0; idx < formatStrings.length; ++idx) {
-        String formatString = formatStrings[idx];
-        if (formatString.equalsIgnoreCase(millisFormatString)) {
-          // Use milliseconds parser if pattern matches our special-case millis pattern string
-          parsers[idx] = new MillisDateFormatParser();
-        } else {
-          parsers[idx] = DateTimeFormat.forPattern(formatString).getParser();
-        }
+    this.dtFormatters = new ArrayList<>();
+
+    for (final String patternText : patternSet) {
+      final DateTimeFormatter formatter;
+      switch (patternText) {
+      case ISO_8601_FORMAT_STR:
+        formatter = DateTimeFormatter.ISO_INSTANT;
+        break;
+      case RFC_1123_FORMAT_STR:
+        formatter = DateTimeFormatter.RFC_1123_DATE_TIME;
+        break;
+      default:
+        formatter = DateTimeFormatter.ofPattern(patternText);
+        break;
       }
-      fmt = new DateTimeFormatterBuilder()
-              .append(null, parsers)
-              .toFormatter()
-              .withDefaultYear(1970);
+
+      this.dtFormatters.add(formatter);
     }
   }
 
   /**
    * Parse the input string and return a timestamp value
-   * @param strValue
+   *
+   * @param text
    * @return
-   * @throws IllegalArgumentException if input string cannot be parsed into timestamp
+   * @throws IllegalArgumentException if input string cannot be parsed into
+   *           timestamp
    */
-  public Timestamp parseTimestamp(String strValue) throws IllegalArgumentException {
-    if (fmt != null) {
-      Optional<Timestamp> parsed = tryParseWithFormat(strValue);
-      if (parsed.isPresent()) {
-        return parsed.get();
+  public Timestamp parseTimestamp(final String text)
+      throws IllegalArgumentException {
+    if (supportMillisEpoch) {
+      try {
+        final long millis = new BigDecimal(text).setScale(0, RoundingMode.DOWN)
+            .longValueExact();
+        return Timestamp.ofEpochMilli(millis);
+      } catch (NumberFormatException e) {
+        LOG.debug("Could not format millis: {}", text);
       }
     }
-
-    // Otherwise try default timestamp parsing
-    return Timestamp.valueOf(strValue);
+    for (DateTimeFormatter formatter : this.dtFormatters) {
+      try {
+        final TemporalAccessor parsed = formatter.parse(text);
+        final Instant inst = Instant.from(wrap(parsed));
+        return Timestamp.ofEpochMilli(inst.toEpochMilli());
+      } catch (DateTimeParseException dtpe) {
+        LOG.debug("Could not parse timestamp text: {}", text);
+      }
+    }
+    return Timestamp.valueOf(text);
   }
 
-  private Optional<Timestamp> tryParseWithFormat(String strValue) {
-    checkState(fmt != null);
-
-    if (startingDateValue != null) {
-      // reset value in case any date fields are missing from the date pattern
-      MutableDateTime mdt = new MutableDateTime(
-          startingDateValue, ISOChronology.getInstanceUTC());
-
-      // Using parseInto() avoids throwing exception when parsing,
-      // allowing fallback to default timestamp parsing if custom patterns fail.
-      int ret = fmt.parseInto(mdt, strValue, 0);
-      // Only accept parse results if we parsed the entire string
-      if (ret == strValue.length()) {
-        return Optional.of(Timestamp.ofEpochMilli(mdt.getMillis()));
-      }
-      return Optional.empty();
+  private TemporalAccessor wrap(final TemporalAccessor in) {
+    if (in.isSupported(ChronoField.INSTANT_SECONDS)
+        && in.isSupported(ChronoField.NANO_OF_SECOND)) {
+      return in;
     }
-
-    try {
-      LocalDateTime dt = fmt.parseLocalDateTime(strValue);
-      return Optional.of(
-          Timestamp.ofEpochMilli(
-              dt.toDateTime(ISOChronology.getInstanceUTC().getZone()).getMillis()));
-    } catch (IllegalArgumentException e) {
-      return Optional.empty();
-    }
+    return new DefaultingTemporalAccessor(in);
   }
 
-  /**
-   * DateTimeParser to parse the date string as the millis since Unix epoch
-   */
-  public static class MillisDateFormatParser implements DateTimeParser {
-    private static final ThreadLocal<Matcher> numericMatcher = new ThreadLocal<Matcher>() {
-      @Override
-      protected Matcher initialValue() {
-        return Pattern.compile("(-?\\d+)(\\.\\d+)?$").matcher("");
+  public static class DefaultingTemporalAccessor implements TemporalAccessor {
+    private static final EnumSet<ChronoField> FIELDS =
+        EnumSet.of(ChronoField.YEAR, ChronoField.MONTH_OF_YEAR,
+            ChronoField.DAY_OF_MONTH, ChronoField.HOUR_OF_DAY,
+            ChronoField.MINUTE_OF_HOUR, ChronoField.SECOND_OF_MINUTE,
+            ChronoField.MILLI_OF_SECOND, ChronoField.NANO_OF_SECOND);
+
+    private final TemporalAccessor wrapped;
+
+    public DefaultingTemporalAccessor(TemporalAccessor in) {
+      ZonedDateTime dateTime =
+          ZonedDateTime.ofInstant(Instant.EPOCH, ZoneOffset.UTC);
+      for (ChronoField field : FIELDS) {
+        if (in.isSupported(field)) {
+          dateTime = dateTime.with(field, in.getLong(field));
+        }
       }
-    };
-
-    private final static DateTimeFieldType[] dateTimeFields = {
-      DateTimeFieldType.year(),
-      DateTimeFieldType.monthOfYear(),
-      DateTimeFieldType.dayOfMonth(),
-      DateTimeFieldType.hourOfDay(),
-      DateTimeFieldType.minuteOfHour(),
-      DateTimeFieldType.secondOfMinute(),
-      DateTimeFieldType.millisOfSecond()
-    };
-
-    public int estimateParsedLength() {
-      return 13; // Shouldn't hit 14 digits until year 2286
+      this.wrapped = dateTime.toInstant();
     }
 
-    public int parseInto(DateTimeParserBucket bucket, String text, int position) {
-      String substr = text.substring(position);
-      Matcher matcher = numericMatcher.get();
-      matcher.reset(substr);
-      if (!matcher.matches()) {
-        return -1;
-      }
+    @Override
+    public long getLong(TemporalField field) {
+      return wrapped.getLong(field);
+    }
 
-      // Joda DateTime only has precision to millis, cut off any fractional portion
-      long millis = Long.parseLong(matcher.group(1));
-      DateTime dt =
-          new DateTime(millis, ISOChronology.getInstanceUTC());
-      for (DateTimeFieldType field : dateTimeFields) {
-        bucket.saveField(field, dt.get(field));
-      }
-      return substr.length();
+    @Override
+    public boolean isSupported(TemporalField field) {
+      return wrapped.isSupported(field);
     }
   }
 }
