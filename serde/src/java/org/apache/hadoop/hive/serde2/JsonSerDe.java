@@ -16,6 +16,7 @@
  * specific language governing permissions and limitations
  * under the License.
  */
+
 package org.apache.hadoop.hive.serde2;
 
 import java.io.ByteArrayInputStream;
@@ -63,13 +64,20 @@ import org.apache.hive.common.util.TimestampParser;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-@SerDeSpec(schemaProps = {serdeConstants.LIST_COLUMNS,
-    serdeConstants.LIST_COLUMN_TYPES,
-    serdeConstants.TIMESTAMP_FORMATS })
+@SerDeSpec(schemaProps = { serdeConstants.LIST_COLUMNS,
+    serdeConstants.LIST_COLUMN_TYPES, serdeConstants.TIMESTAMP_FORMATS,
+    JsonSerDe.BINARY_FORMAT, JsonSerDe.IGNORE_EXTRA })
 public class JsonSerDe extends AbstractSerDe {
 
   private static final Logger LOG = LoggerFactory.getLogger(JsonSerDe.class);
+
+  public static final String BINARY_FORMAT = "json.binary.format";
+  public static final String IGNORE_EXTRA = "text.ignore.extra.fields";
+  public static final String NULL_EMPTY_LINES = "text.null.empty.line";
+
   private List<String> columnNames;
+
+  private boolean nullEmptyLines;
 
   private HiveJsonStructReader structReader;
   private StructTypeInfo rowTypeInfo;
@@ -77,7 +85,7 @@ public class JsonSerDe extends AbstractSerDe {
   @Override
   public void initialize(Configuration conf, Properties tbl)
       throws SerDeException {
-    List<TypeInfo> columnTypes;
+
     LOG.debug("Initializing JsonSerDe: {}", tbl.entrySet());
 
     // Get column names
@@ -85,34 +93,43 @@ public class JsonSerDe extends AbstractSerDe {
     final String columnNameDelimiter = tbl.getProperty(
         serdeConstants.COLUMN_NAME_DELIMITER, String.valueOf(SerDeUtils.COMMA));
 
-    // all table column names
-    if (columnNameProperty.isEmpty()) {
-      columnNames = Collections.emptyList();
-    } else {
-      columnNames = Arrays.asList(columnNameProperty.split(columnNameDelimiter));
-    }
+    this.columnNames = columnNameProperty.isEmpty() ? Collections.emptyList()
+        : Arrays.asList(columnNameProperty.split(columnNameDelimiter));
 
     // all column types
-    String columnTypeProperty = tbl.getProperty(serdeConstants.LIST_COLUMN_TYPES);
-    if (columnTypeProperty.isEmpty()) {
-      columnTypes = Collections.emptyList();
-    } else {
-      columnTypes = TypeInfoUtils.getTypeInfosFromTypeString(columnTypeProperty);
-    }
+    final String columnTypeProperty =
+        tbl.getProperty(serdeConstants.LIST_COLUMN_TYPES);
+
+    final List<TypeInfo> columnTypes =
+        columnTypeProperty.isEmpty() ? Collections.emptyList()
+            : TypeInfoUtils.getTypeInfosFromTypeString(columnTypeProperty);
 
     LOG.debug("columns: {}, {}", columnNameProperty, columnNames);
     LOG.debug("types: {}, {} ", columnTypeProperty, columnTypes);
 
     assert (columnNames.size() == columnTypes.size());
 
-    rowTypeInfo = (StructTypeInfo) TypeInfoFactory.getStructTypeInfo(columnNames, columnTypes);
+    final String nullEmpty = tbl.getProperty(NULL_EMPTY_LINES, "false");
+    this.nullEmptyLines = Boolean.parseBoolean(nullEmpty);
 
-    TimestampParser tsParser = new TimestampParser(
-        HiveStringUtils.splitAndUnEscape(tbl.getProperty(serdeConstants.TIMESTAMP_FORMATS)));
-    structReader = new HiveJsonStructReader(rowTypeInfo, tsParser);
-    structReader.setIgnoreUnknownFields(true);
-    structReader.enableHiveColIndexParsing(true);
-    structReader.setWritablesUsage(true);
+    this.rowTypeInfo = (StructTypeInfo) TypeInfoFactory
+        .getStructTypeInfo(columnNames, columnTypes);
+
+    final TimestampParser tsParser = new TimestampParser(HiveStringUtils
+        .splitAndUnEscape(tbl.getProperty(serdeConstants.TIMESTAMP_FORMATS)));
+
+    this.structReader = new HiveJsonStructReader(rowTypeInfo, tsParser);
+    this.structReader.enableHiveColIndexParsing(true);
+    this.structReader.setWritablesUsage(true);
+
+    final String binaryEncoding = tbl.getProperty(BINARY_FORMAT, "default");
+    this.structReader.setBinaryEncodingType(binaryEncoding);
+
+    final String ignoreExtras = tbl.getProperty(IGNORE_EXTRA, "false");
+    this.structReader
+        .setIgnoreUnknownFields(Boolean.parseBoolean(ignoreExtras));
+
+    LOG.debug("JSON Struct Reader: {}", structReader);
   }
 
   /**
@@ -122,7 +139,11 @@ public class JsonSerDe extends AbstractSerDe {
   @Override
   public Object deserialize(Writable blob) throws SerDeException {
     final Text t = (Text) blob;
-    // TODO: If line is empty, return empty struct?
+    if (this.nullEmptyLines && t.getLength() == 0) {
+      final int fieldCount =
+          structReader.getObjectInspector().getAllStructFieldRefs().size();
+      return new Object[fieldCount];
+    }
     try {
       return structReader.parseStruct(
           new ByteArrayInputStream((t.getBytes()), 0, t.getLength()));

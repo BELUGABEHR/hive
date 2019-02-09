@@ -58,13 +58,20 @@ import org.apache.hive.common.util.TimestampParser;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import com.fasterxml.jackson.core.JsonParseException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.JsonNodeType;
 import com.fasterxml.jackson.databind.node.TextNode;
 import com.google.common.base.Preconditions;
 
+/**
+ * JavaScript Object Notation (JSON) objects group items of possibly different
+ * types into a single type, much like a classic 'struct'. Each JSON object is
+ * surrounded by curly braces {} and is presented as key/value pairs. An item
+ * with the JSON object may itself be a JSON object and therefore allows for
+ * nested fields. This class parses JSON objects and returns each item in the
+ * struct in an array of Objects.
+ */
 public class HiveJsonStructReader {
 
   private static final Logger LOG =
@@ -77,7 +84,7 @@ public class HiveJsonStructReader {
   private final Map<String, StructField> discoveredFields = new HashMap<>();
   private final Set<String> discoveredUnknownFields = new HashSet<>();
 
-  private final ObjectInspector oi;
+  private final StructObjectInspector soi;
   private TimestampParser tsParser;
 
   private boolean ignoreUnknownFields;
@@ -85,32 +92,66 @@ public class HiveJsonStructReader {
   private boolean writeablePrimitives;
   private String binaryEncodingType;
 
-  public HiveJsonStructReader(TypeInfo t) {
-    this(t, new TimestampParser());
+  /**
+   * Constructor with default the Hive default timestamp parser.
+   *
+   * @param typeInfo Type info for all the fields in the JSON object
+   */
+  public HiveJsonStructReader(TypeInfo typeInfo) {
+    this(typeInfo, new TimestampParser());
   }
 
-  public HiveJsonStructReader(TypeInfo t, TimestampParser tsParser) {
+  /**
+   * Constructor with default the Hive default timestamp parser.
+   *
+   * @param typeInfo Type info for all the fields in the JSON object
+   * @param tsParser Custom timestamp parser
+   */
+  public HiveJsonStructReader(TypeInfo typeInfo, TimestampParser tsParser) {
     this.ignoreUnknownFields = false;
     this.writeablePrimitives = false;
     this.hiveColIndexParsing = false;
     this.binaryEncodingType = DEFAULT_BINARY_DECODING;
     this.tsParser = tsParser;
-    this.oi = TypeInfoUtils.getStandardWritableObjectInspectorFromTypeInfo(t);
+    this.soi = (StructObjectInspector) TypeInfoUtils
+        .getStandardWritableObjectInspectorFromTypeInfo(typeInfo);
   }
 
-  public Object parseStruct(String text)
-      throws JsonParseException, IOException, SerDeException {
+  /**
+   * Parse text containing a complete JSON object.
+   *
+   * @param text The text to parse
+   * @return An array of Objects, one for each field in the JSON object
+   * @throws IOException Unable to parse the JSON text
+   * @throws SerDeException The SerDe is not configured correctly
+   */
+  public Object parseStruct(String text) throws IOException, SerDeException {
     final JsonNode rootNode = this.objectMapper.readTree(text);
-    return visitNode(rootNode, this.oi);
+    return visitNode(rootNode, this.soi);
   }
 
-  public Object parseStruct(InputStream is)
-      throws JsonParseException, IOException, SerDeException {
+  /**
+   * Parse text containing a complete JSON object.
+   *
+   * @param is The InputStream to read the text from
+   * @return An array of Objects, one for each field in the JSON object
+   * @throws IOException Unable to parse the JSON text
+   * @throws SerDeException The SerDe is not configured correctly
+   */
+  public Object parseStruct(InputStream is) throws IOException, SerDeException {
     final JsonNode rootNode = this.objectMapper.readTree(is);
-    return visitNode(rootNode, this.oi);
+    return visitNode(rootNode, this.soi);
   }
 
-  private Object visitNode(final JsonNode rootNode, ObjectInspector oi)
+  /**
+   * Visit a node and parse it based on the provided ObjectInspector
+   *
+   * @param rootNode The root node to process
+   * @param oi The ObjectInspector to use
+   * @return The value in this node (may be a complex type if nested)
+   * @throws SerDeException The SerDe is not configured correctly
+   */
+  private Object visitNode(final JsonNode rootNode, final ObjectInspector oi)
       throws SerDeException {
 
     switch (oi.getCategory()) {
@@ -129,6 +170,15 @@ public class HiveJsonStructReader {
 
   }
 
+  /**
+   * Visit a node if it is expected to be a Map (a.k.a. JSON Object)
+   *
+   * @param rootNode The node pointing at the JSON object
+   * @param oi The ObjectInspector to parse the Map (must be a
+   *          MapObjectInspector)
+   * @return A Java Map containing the contents of the JSON map
+   * @throws SerDeException The SerDe is not configured correctly
+   */
   private Object visitMapNode(final JsonNode rootNode, final ObjectInspector oi)
       throws SerDeException {
     Preconditions.checkArgument(JsonNodeType.OBJECT == rootNode.getNodeType());
@@ -142,7 +192,7 @@ public class HiveJsonStructReader {
         ((MapObjectInspector) oi).getMapValueObjectInspector();
 
     if (!(mapKeyInspector instanceof PrimitiveObjectInspector)) {
-      throw new SerDeException("Map key must be a primitive");
+      throw new SerDeException("Map key must be a primitive type");
     }
 
     final Iterator<Entry<String, JsonNode>> it = rootNode.fields();
@@ -157,13 +207,26 @@ public class HiveJsonStructReader {
     return ret;
   }
 
+  /**
+   * Visit a node if it is expected to be a Struct data type (a.k.a. JSON
+   * Object)
+   *
+   * @param rootNode The node pointing at the JSON object
+   * @param oi The ObjectInspector to parse the Map (must be a
+   *          StructObjectInspector)
+   * @return A primitive array of Objects, each element is an element of the
+   *         struct
+   * @throws SerDeException The SerDe is not configured correctly
+   */
   private Object visitStructNode(final JsonNode rootNode,
       final ObjectInspector oi) throws SerDeException {
 
     Preconditions.checkArgument(JsonNodeType.OBJECT == rootNode.getNodeType());
 
+    final StructObjectInspector structInspector = (StructObjectInspector) oi;
+
     final Object[] ret =
-        new Object[((StructObjectInspector) oi).getAllStructFieldRefs().size()];
+        new Object[structInspector.getAllStructFieldRefs().size()];
 
     final Iterator<Entry<String, JsonNode>> it = rootNode.fields();
     while (it.hasNext()) {
@@ -171,7 +234,10 @@ public class HiveJsonStructReader {
       final String fieldName = field.getKey();
       final JsonNode childNode = field.getValue();
       final StructField structField =
-          getStructField((StructObjectInspector) oi, fieldName);
+          getStructField(structInspector, fieldName);
+
+      // If the struct field is null it is because there is a field defined in
+      // the JSON object that was not defined in the table definition. Skip it.
       if (structField != null) {
         final Object childValue =
             visitNode(childNode, structField.getFieldObjectInspector());
@@ -182,11 +248,21 @@ public class HiveJsonStructReader {
     return ret;
   }
 
-  private Object visitArrayNode(final JsonNode rootNode, ObjectInspector oi)
-      throws SerDeException {
+  /**
+   * Visit a node if it is expected to be a JSON Array data type (a.k.a. Hive
+   * Array type)
+   *
+   * @param rootNode The node pointing at the JSON object
+   * @param oi The ObjectInspector to parse the List (must be a
+   *          ListObjectInspector)
+   * @return A Java List of Objects, each element is an element of the array
+   * @throws SerDeException The SerDe is not configured correctly
+   */
+  private Object visitArrayNode(final JsonNode rootNode,
+      final ObjectInspector oi) throws SerDeException {
     Preconditions.checkArgument(JsonNodeType.ARRAY == rootNode.getNodeType());
 
-    final ObjectInspector eOI =
+    final ObjectInspector loi =
         ((ListObjectInspector) oi).getListElementObjectInspector();
 
     final List<Object> ret = new ArrayList<>();
@@ -194,17 +270,28 @@ public class HiveJsonStructReader {
 
     while (it.hasNext()) {
       final JsonNode element = it.next();
-      ret.add(visitNode(element, eOI));
+      ret.add(visitNode(element, loi));
     }
 
     return ret;
   }
 
-  private Object visitPrimativeNode(final JsonNode rootNode,
+  /**
+   * Visit a node if it is expected to be a primitive value (JSON leaf node).
+   *
+   * @param leafNode The node pointing at the JSON object
+   * @param oi The ObjectInspector to parse the value (must be a
+   *          PrimitiveObjectInspector)
+   * @return A Java primitive Object
+   * @throws SerDeException The SerDe is not configured correctly
+   */
+  private Object visitPrimativeNode(final JsonNode leafNode,
       final ObjectInspector oi) throws SerDeException {
+
+    final String value = leafNode.asText();
     final PrimitiveTypeInfo typeInfo =
         ((PrimitiveObjectInspector) oi).getTypeInfo();
-    final String value = rootNode.asText();
+
     if (writeablePrimitives) {
       Converter c = ObjectInspectorConverters.getConverter(
           PrimitiveObjectInspectorFactory.javaStringObjectInspector, oi);
@@ -246,6 +333,14 @@ public class HiveJsonStructReader {
     }
   }
 
+  /**
+   * A user may configure the encoding for binary data represented as text
+   * within a JSON object. This method applies that encoding to the text.
+   *
+   * @param byteText The text containing the binary data
+   * @return A byte array with the binary data
+   * @throws SerDeException The SerDe is not configured correctly
+   */
   private byte[] getByteValue(final String byteText) throws SerDeException {
     switch (this.binaryEncodingType) {
     case "default":
@@ -265,6 +360,14 @@ public class HiveJsonStructReader {
     }
   }
 
+  /**
+   * Matches the JSON object's field name with the Hive data type.
+   *
+   * @param oi The ObjectInsepctor to lookup the matching in
+   * @param fieldName The name of the field parsed from the JSON text
+   * @return The meta data of regarding this field
+   * @throws SerDeException The SerDe is not configured correctly
+   */
   private StructField getStructField(final StructObjectInspector oi,
       final String fieldName) throws SerDeException {
 
@@ -310,18 +413,21 @@ public class HiveJsonStructReader {
     return structField;
   }
 
-  Pattern internalPattern = Pattern.compile("^_col([0-9]+)$");
+  private final Pattern internalPattern = Pattern.compile("^_col([0-9]+)$");
 
-  private int getColIndex(String internalName) {
+  /**
+   * Look up a column based on its index
+   *
+   * @param internalName The name of the column
+   * @return The index of the field or -1 if the field name does not contain its
+   *         index number too
+   */
+  private int getColIndex(final String internalName) {
     // The above line should have been all the implementation that
     // we need, but due to a bug in that impl which recognizes
     // only single-digit columns, we need another impl here.
-    Matcher m = internalPattern.matcher(internalName);
-    if (!m.matches()) {
-      return -1;
-    } else {
-      return Integer.parseInt(m.group(1));
-    }
+    final Matcher m = internalPattern.matcher(internalName);
+    return m.matches() ? Integer.valueOf(m.group(1)) : -1;
   }
 
   public void setIgnoreUnknownFields(boolean ignore) {
@@ -336,8 +442,8 @@ public class HiveJsonStructReader {
     writeablePrimitives = writables;
   }
 
-  public ObjectInspector getObjectInspector() {
-    return oi;
+  public StructObjectInspector getObjectInspector() {
+    return soi;
   }
 
   public String getBinaryEncodingType() {
@@ -346,5 +452,13 @@ public class HiveJsonStructReader {
 
   public void setBinaryEncodingType(String encodingType) {
     this.binaryEncodingType = encodingType;
+  }
+
+  @Override
+  public String toString() {
+    return "HiveJsonStructReader [ignoreUnknownFields=" + ignoreUnknownFields
+        + ", hiveColIndexParsing=" + hiveColIndexParsing
+        + ", writeablePrimitives=" + writeablePrimitives
+        + ", binaryEncodingType=" + binaryEncodingType + "]";
   }
 }
