@@ -93,4 +93,10 @@ public class ZooKeeperHiveLock extends HiveLock {
     }
     return builder.toHashCode();
   }
+
+  @Override
+  public String toString() {
+    return "ZooKeeperHiveLock [path=" + path + ", obj=" + obj + ", mode=" + mode
+        + "]";
+  }
 }

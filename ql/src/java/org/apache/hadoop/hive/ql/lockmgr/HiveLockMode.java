@@ -18,9 +18,11 @@
 
 package org.apache.hadoop.hive.ql.lockmgr;
 
+/**
+ * The lock modes arranged in order of least isolated to most.
+ */
 public enum HiveLockMode {
   SHARED,
-  EXCLUSIVE,
-  SEMI_SHARED; // SEMI_SHARED can share with SHARED but not with itself
+  SEMI_SHARED, // SEMI_SHARED can share with SHARED but not with itself
+  EXCLUSIVE;
 }
-

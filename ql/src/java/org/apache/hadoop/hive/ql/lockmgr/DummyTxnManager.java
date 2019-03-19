@@ -17,16 +17,21 @@
  */
 package org.apache.hadoop.hive.ql.lockmgr;
 
-import org.apache.hadoop.hive.common.ValidTxnWriteIdList;
-import org.apache.hadoop.hive.metastore.api.CommitTxnRequest;
-import org.apache.hadoop.hive.metastore.api.TxnToWriteId;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.apache.hadoop.hive.common.ValidTxnList;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.LinkedList;
+import java.util.List;
+import java.util.Map;
+
+import org.apache.commons.lang3.StringUtils;
 import org.apache.hadoop.hive.common.ValidReadTxnList;
-import org.apache.hadoop.hive.common.ValidWriteIdList;
+import org.apache.hadoop.hive.common.ValidTxnList;
+import org.apache.hadoop.hive.common.ValidTxnWriteIdList;
 import org.apache.hadoop.hive.conf.HiveConf;
+import org.apache.hadoop.hive.metastore.api.CommitTxnRequest;
 import org.apache.hadoop.hive.metastore.api.Database;
+import org.apache.hadoop.hive.metastore.api.TxnToWriteId;
 import org.apache.hadoop.hive.ql.Context;
 import org.apache.hadoop.hive.ql.Driver.LockedDriverState;
 import org.apache.hadoop.hive.ql.ErrorMsg;
@@ -38,8 +43,8 @@ import org.apache.hadoop.hive.ql.metadata.HiveException;
 import org.apache.hadoop.hive.ql.metadata.Partition;
 import org.apache.hadoop.hive.ql.metadata.Table;
 import org.apache.hadoop.util.ReflectionUtils;
-
-import java.util.*;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * An implementation of {@link HiveTxnManager} that does not support
@@ -47,7 +52,7 @@ import java.util.*;
  */
 class DummyTxnManager extends HiveTxnManagerImpl {
   static final private Logger LOG =
-      LoggerFactory.getLogger(DummyTxnManager.class.getName());
+      LoggerFactory.getLogger(DummyTxnManager.class);
 
   private HiveLockManager lockMgr;
 
@@ -102,12 +107,12 @@ class DummyTxnManager extends HiveTxnManagerImpl {
       if (supportConcurrency) {
         String lockMgrName =
             conf.getVar(HiveConf.ConfVars.HIVE_LOCK_MANAGER);
-        if ((lockMgrName == null) || (lockMgrName.isEmpty())) {
+        if (StringUtils.isBlank(lockMgrName)) {
           throw new LockException(ErrorMsg.LOCKMGR_NOT_SPECIFIED.getMsg());
         }
 
         try {
-          LOG.info("Creating lock manager of type " + lockMgrName);
+          LOG.info("Creating lock manager of type {}", lockMgrName);
           lockMgr = (HiveLockManager)ReflectionUtils.newInstance(
               conf.getClassByName(lockMgrName), conf);
           lockManagerCtx = new HiveLockManagerCtx(conf);
@@ -163,7 +168,8 @@ class DummyTxnManager extends HiveTxnManagerImpl {
       if (!input.needsLock()) {
         continue;
       }
-      LOG.debug("Adding " + input.getName() + " to list of lock inputs");
+      LOG.debug("Adding {}:{} to list of lock inputs", input.getName(),
+          HiveLockMode.SHARED);
       if (input.getType() == ReadEntity.Type.DATABASE) {
         lockObjects.addAll(getLockObjects(plan, input.getDatabase(), null,
             null, HiveLockMode.SHARED));
@@ -182,7 +188,9 @@ class DummyTxnManager extends HiveTxnManagerImpl {
       if (lockMode == null) {
         continue;
       }
-      LOG.debug("Adding " + output.getName() + " to list of lock outputs");
+
+      LOG.debug("Adding {}:{} to list of lock outputs", output.getName(),
+          lockMode);
       List<HiveLockObj> lockObj = null;
       if (output.getType() == WriteEntity.Type.DATABASE) {
         lockObjects.addAll(getLockObjects(plan, output.getDatabase(), null, null, lockMode));

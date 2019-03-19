@@ -46,4 +46,9 @@ public class HiveLockObj {
   public String getName() {
     return obj.getName();
   }
+
+  @Override
+  public String toString() {
+    return "HiveLockObj [obj=" + obj + ", mode=" + mode + "]";
+  }
 }

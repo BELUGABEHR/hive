@@ -18,6 +18,7 @@
 
 package org.apache.hadoop.hive.ql.lockmgr;
 
+import java.util.Arrays;
 import java.util.Map;
 
 import org.apache.commons.lang.StringUtils;
@@ -31,6 +32,7 @@ import org.apache.hadoop.hive.ql.metadata.Partition;
 import org.apache.hadoop.hive.ql.metadata.Table;
 
 public class HiveLockObject {
+
   String[] pathNames = null;
 
   public static class HiveLockObjectData {
@@ -312,6 +314,12 @@ public class HiveLockObject {
       builder.append(data);
     }
     return builder.toHashCode();
+  }
+
+  @Override
+  public String toString() {
+    return "HiveLockObject [pathNames=" + Arrays.toString(pathNames) + ", data="
+        + data + "]";
   }
 
   private static String removeDelimiter(String in) {
