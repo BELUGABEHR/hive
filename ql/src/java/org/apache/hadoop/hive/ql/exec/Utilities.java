@@ -253,7 +253,6 @@ public final class Utilities {
 
   public static Random randGen = new Random();
 
-  private static final Object INPUT_SUMMARY_LOCK = new Object();
   private static final Object ROOT_HDFS_DIR_LOCK  = new Object();
 
   @FunctionalInterface
@@ -2454,45 +2453,42 @@ public final class Utilities {
     final long[] summary = {0L, 0L, 0L};
     final Set<Path> pathNeedProcess = new HashSet<>();
 
-    // Since multiple threads could call this method concurrently, locking
-    // this method will avoid number of threads out of control.
-    synchronized (INPUT_SUMMARY_LOCK) {
-      // For each input path, calculate the total size.
-      for (final Path path : work.getPathToAliases().keySet()) {
-        if (path == null) {
-          continue;
-        }
-        if (filter != null && !filter.accept(path)) {
-          continue;
-        }
-
-        ContentSummary cs = ctx.getCS(path);
-        if (cs != null) {
-          summary[0] += cs.getLength();
-          summary[1] += cs.getFileCount();
-          summary[2] += cs.getDirectoryCount();
-        } else {
-          pathNeedProcess.add(path);
-        }
+    // For each input path, calculate the total size.
+    for (final Path path : work.getPathToAliases().keySet()) {
+      if (path == null) {
+        continue;
+      }
+      if (filter != null && !filter.accept(path)) {
+        continue;
       }
 
-      // Process the case when name node call is needed
-      final ExecutorService executor;
-
-      int numExecutors = getMaxExecutorsForInputListing(ctx.getConf(), pathNeedProcess.size());
-      if (numExecutors > 1) {
-        LOG.info("Using {} threads for getContentSummary", numExecutors);
-        executor = Executors.newFixedThreadPool(numExecutors,
-                new ThreadFactoryBuilder().setDaemon(true)
-                        .setNameFormat("Get-Input-Summary-%d").build());
+      ContentSummary cs = ctx.getCS(path);
+      if (cs != null) {
+        summary[0] += cs.getLength();
+        summary[1] += cs.getFileCount();
+        summary[2] += cs.getDirectoryCount();
       } else {
-        LOG.info("Not using thread pool for getContentSummary");
-        executor = MoreExecutors.newDirectExecutorService();
+        pathNeedProcess.add(path);
       }
-      getInputSummaryWithPool(ctx, Collections.unmodifiableSet(pathNeedProcess),
-          work, summary, executor);
-      perfLogger.PerfLogEnd(CLASS_NAME, PerfLogger.INPUT_SUMMARY);
     }
+
+    // Process the case when name node call is needed
+    final ExecutorService executor;
+
+    int numExecutors = getMaxExecutorsForInputListing(ctx.getConf(), pathNeedProcess.size());
+    if (numExecutors > 1) {
+      LOG.info("Using {} threads for getContentSummary", numExecutors);
+      executor = Executors.newFixedThreadPool(numExecutors,
+              new ThreadFactoryBuilder().setDaemon(true)
+                      .setNameFormat("Get-Input-Summary-%d").build());
+    } else {
+      LOG.info("Not using thread pool for getContentSummary");
+      executor = MoreExecutors.newDirectExecutorService();
+    }
+    getInputSummaryWithPool(ctx, Collections.unmodifiableSet(pathNeedProcess),
+        work, summary, executor);
+    perfLogger.PerfLogEnd(CLASS_NAME, PerfLogger.INPUT_SUMMARY);
+
     return new ContentSummary.Builder().length(summary[0])
         .fileCount(summary[1]).directoryCount(summary[2]).build();
   }
