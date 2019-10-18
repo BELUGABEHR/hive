@@ -146,7 +146,6 @@ public class TestHiveConf {
     }
 
     ArrayList<String> hiddenList = Lists.newArrayList(
-        HiveConf.ConfVars.METASTOREPWD.varname,
         HiveConf.ConfVars.HIVE_SERVER2_SSL_KEYSTORE_PASSWORD.varname,
         "fs.s3.awsSecretAccessKey",
         "fs.s3n.awsSecretAccessKey",

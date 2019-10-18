@@ -2868,8 +2868,9 @@ private void constructOneLBLocationMap(FileStatus fSta,
 
     // fetch all the partitions matching the part spec using the partition iterable
     // this way the maximum batch size configuration parameter is considered
-    PartitionIterable partitionIterable = new PartitionIterable(Hive.get(), tbl, partSpec,
-              conf.getInt(MetastoreConf.ConfVars.BATCH_RETRIEVE_MAX.getVarname(), 300));
+    PartitionIterable partitionIterable =
+        new PartitionIterable(Hive.get(), tbl, partSpec, MetastoreConf
+            .getIntVar(conf, MetastoreConf.ConfVars.BATCH_RETRIEVE_MAX));
     Iterator<Partition> iterator = partitionIterable.iterator();
 
     // Match valid partition path to partitions
@@ -3746,7 +3747,8 @@ private void constructOneLBLocationMap(FileStatus fSta,
     }
     List<Partition> partitions = new ArrayList<Partition>(partNames.size());
 
-    int batchSize = HiveConf.getIntVar(conf, HiveConf.ConfVars.METASTORE_BATCH_RETRIEVE_MAX);
+    int batchSize = MetastoreConf.getIntVar(conf,
+        MetastoreConf.ConfVars.BATCH_RETRIEVE_MAX);
     // TODO: might want to increase the default batch size. 1024 is viable; MS gets OOM if too high.
     int nParts = partNames.size();
     int nBatches = nParts / batchSize;
@@ -5080,7 +5082,8 @@ private void constructOneLBLocationMap(FileStatus fSta,
         }
         throw ex;
       }
-      String metaStoreUris = conf.getVar(HiveConf.ConfVars.METASTOREURIS);
+      String metaStoreUris =
+          MetastoreConf.getAsString(conf, MetastoreConf.ConfVars.THRIFT_URIS);
       if (!org.apache.commons.lang3.StringUtils.isEmpty(metaStoreUris)) {
         // get a synchronized wrapper if the meta store is remote.
         metaStoreClient = HiveMetaStoreClient.newSynchronizedClient(metaStoreClient);

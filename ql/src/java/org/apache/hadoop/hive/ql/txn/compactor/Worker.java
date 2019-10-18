@@ -337,7 +337,6 @@ public class Worker extends RemoteCompactorThread implements MetaStoreThread {
         }
         sb.setLength(sb.length() - 1); //remove trailing ,
         LOG.info(ci + ": running '" + sb.toString() + "'");
-        conf.setVar(HiveConf.ConfVars.METASTOREURIS,"");
 
         //todo: use DriverUtils.runOnDriver() here
         QueryState queryState = new QueryState.Builder().withGenerateNewQueryId(true).withHiveConf(conf).build();

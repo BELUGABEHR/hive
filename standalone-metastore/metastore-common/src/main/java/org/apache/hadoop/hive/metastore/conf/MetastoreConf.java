@@ -1112,6 +1112,9 @@ public class MetastoreConf {
             "select query has incorrect syntax or something similar inside a transaction, the\n" +
             "entire transaction will fail and fall-back to DataNucleus will not be possible. You\n" +
             "should disable the usage of direct SQL inside transactions if that happens in your case."),
+    TXN_HEARTBEAT_THREADPOOL_SIZE("hive.txn.heartbeat.threadpool.size",
+        "hive.txn.heartbeat.threadpool.size", 5,
+        "The number of threads to use for heartbeating. For Hive CLI, 1 is enough. For HiveServer2, we need a few"),
     TXN_MAX_OPEN_BATCH("metastore.txn.max.open.batch", "hive.txn.max.open.batch", 1000,
         "Maximum number of transactions that can be fetched in one call to open_txns().\n" +
             "This controls how many transactions streaming agents such as Flume or Storm open\n" +
@@ -1671,6 +1674,18 @@ public class MetastoreConf {
   }
 
   /**
+   * Set the variable as a long
+   * @param conf configuration file to set it in
+   * @param var variable to set
+   * @param val value to set it to
+   */
+  public static int setIntVar(Configuration conf, ConfVars var, int value) {
+    assert var.defaultVal.getClass() == Integer.class;
+    String val = conf.get(var.varname);
+    return val == null ? conf.getInt(var.hiveName, (Integer)var.defaultVal) : Integer.valueOf(val);
+  }
+
+  /**
    * Get the variable as a long
    * @param conf configuration to retrieve it from
    * @param var variable to retrieve
@@ -2043,4 +2058,5 @@ public class MetastoreConf {
     buf.append("Finished MetastoreConf object.\n");
     return buf.toString();
   }
+
 }

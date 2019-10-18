@@ -4007,9 +4007,7 @@ public class CalcitePlanner extends SemanticAnalyzer {
           Map<ASTNode, ExprNodeDesc> astToExprNDescMap = null;
           ExprNodeDesc obExprNDesc = null;
 
-          boolean isBothByPos = HiveConf.getBoolVar(conf, ConfVars.HIVE_GROUPBY_ORDERBY_POSITION_ALIAS);
-          boolean isObyByPos = isBothByPos
-              || HiveConf.getBoolVar(conf, ConfVars.HIVE_ORDERBY_POSITION_ALIAS);
+          boolean isObyByPos = HiveConf.getBoolVar(conf, ConfVars.HIVE_ORDERBY_POSITION_ALIAS);
           // replace each of the position alias in ORDERBY with the actual column
           if (ref != null && ref.getToken().getType() == HiveParser.Number) {
             if (isObyByPos) {

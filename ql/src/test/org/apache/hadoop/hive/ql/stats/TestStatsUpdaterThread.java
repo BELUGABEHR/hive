@@ -68,13 +68,13 @@ public class TestStatsUpdaterThread {
     return TEST_DATA_DIR;
   }
 
-  @SuppressWarnings("deprecation")
   @Before
   public void setUp() throws Exception {
     this.hiveConf = new HiveConf(TestStatsUpdaterThread.class);
     hiveConf.set(HiveConf.ConfVars.PREEXECHOOKS.varname, "");
     hiveConf.set(HiveConf.ConfVars.POSTEXECHOOKS.varname, "");
-    hiveConf.set(HiveConf.ConfVars.METASTOREWAREHOUSE.varname, getTestDataDir());
+    MetastoreConf.setVar(hiveConf, MetastoreConf.ConfVars.WAREHOUSE,
+        getTestDataDir());
     hiveConf.setVar(HiveConf.ConfVars.HIVEINPUTFORMAT, HiveInputFormat.class.getName());
     hiveConf.setVar(HiveConf.ConfVars.HIVE_AUTHORIZATION_MANAGER,
        "org.apache.hadoop.hive.ql.security.authorization.plugin.sqlstd.SQLStdHiveAuthorizerFactory");

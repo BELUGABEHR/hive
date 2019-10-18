@@ -76,15 +76,13 @@ public class TestHiveConfRestrictList {
   @Test
   public void testAppendRestriction() throws Exception {
     String appendListStr = ConfVars.SCRATCHDIR.varname + "," +
-        ConfVars.LOCALSCRATCHDIR.varname + "," +
-        ConfVars.METASTOREURIS.varname;
+        ConfVars.LOCALSCRATCHDIR.varname;
 
     conf.addToRestrictList(appendListStr);
     // check if the new configs are added to HIVE_CONF_RESTRICTED_LIST
     String newRestrictList = conf.getVar(ConfVars.HIVE_CONF_RESTRICTED_LIST);
     assertTrue(newRestrictList.contains(ConfVars.SCRATCHDIR.varname));
     assertTrue(newRestrictList.contains(ConfVars.LOCALSCRATCHDIR.varname));
-    assertTrue(newRestrictList.contains(ConfVars.METASTOREURIS.varname));
 
     // check if the old values are still there in HIVE_CONF_RESTRICTED_LIST
     assertTrue(newRestrictList.contains(ConfVars.HIVETESTMODEPREFIX.varname));
@@ -93,7 +91,6 @@ public class TestHiveConfRestrictList {
     verifyRestriction(ConfVars.HIVETESTMODEPREFIX.varname, "foo");
     verifyRestriction(ConfVars.HIVE_CONF_RESTRICTED_LIST.varname, "foo");
     verifyRestriction(ConfVars.LOCALSCRATCHDIR.varname, "foo");
-    verifyRestriction(ConfVars.METASTOREURIS.varname, "foo");
   }
 
   private void verifyRestriction(String varName, String newVal) {

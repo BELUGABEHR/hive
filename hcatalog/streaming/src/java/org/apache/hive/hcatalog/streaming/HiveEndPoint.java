@@ -44,6 +44,7 @@ import org.apache.hadoop.hive.metastore.api.NoSuchTxnException;
 import org.apache.hadoop.hive.metastore.api.Table;
 import org.apache.hadoop.hive.metastore.api.TxnAbortedException;
 import org.apache.hadoop.hive.metastore.api.TxnToWriteId;
+import org.apache.hadoop.hive.metastore.conf.MetastoreConf;
 import org.apache.hive.hcatalog.common.HCatUtil;
 
 import org.apache.hadoop.security.UserGroupInformation;
@@ -470,10 +471,12 @@ public class HiveEndPoint {
             throws ConnectionError {
 
       if (endPoint.metaStoreUri!= null) {
-        conf.setVar(HiveConf.ConfVars.METASTOREURIS, endPoint.metaStoreUri);
+        MetastoreConf.setVar(conf, MetastoreConf.ConfVars.THRIFT_URIS,
+            endPoint.metaStoreUri);
       }
       if(secureMode) {
-        conf.setBoolVar(HiveConf.ConfVars.METASTORE_USE_THRIFT_SASL,true);
+        MetastoreConf.setBoolVar(conf, MetastoreConf.ConfVars.USE_THRIFT_SASL,
+            true);
       }
       try {
         return HCatUtil.getHiveMetastoreClient(conf);
@@ -1028,7 +1031,8 @@ public class HiveEndPoint {
   static HiveConf createHiveConf(Class<?> clazz, String metaStoreUri) {
     HiveConf conf = new HiveConf(clazz);
     if (metaStoreUri!= null) {
-      setHiveConf(conf, HiveConf.ConfVars.METASTOREURIS, metaStoreUri);
+      setHiveConf(conf, MetastoreConf.ConfVars.THRIFT_URIS.getHiveName(),
+          metaStoreUri);
     }
     HiveEndPoint.overrideConfSettings(conf);
     return conf;
@@ -1038,9 +1042,17 @@ public class HiveEndPoint {
     setHiveConf(conf, HiveConf.ConfVars.HIVE_TXN_MANAGER,
             "org.apache.hadoop.hive.ql.lockmgr.DbTxnManager");
     setHiveConf(conf, HiveConf.ConfVars.HIVE_SUPPORT_CONCURRENCY, true);
-    setHiveConf(conf, HiveConf.ConfVars.METASTORE_EXECUTE_SET_UGI, true);
+    setHiveConf(conf, MetastoreConf.ConfVars.EXECUTE_SET_UGI.getHiveName(),
+        Boolean.TRUE.toString());
     // Avoids creating Tez Client sessions internally as it takes much longer currently
     setHiveConf(conf, HiveConf.ConfVars.HIVE_EXECUTION_ENGINE, "mr");
+  }
+
+  private static void setHiveConf(HiveConf conf, String prop, String value) {
+    if( LOG.isDebugEnabled() ) {
+      LOG.debug("Overriding HiveConf setting : " + prop + " = " + value);
+    }
+    conf.set(prop, value);
   }
 
   private static void setHiveConf(HiveConf conf, HiveConf.ConfVars var, String value) {

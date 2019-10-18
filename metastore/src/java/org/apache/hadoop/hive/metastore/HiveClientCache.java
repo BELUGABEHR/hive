@@ -36,6 +36,7 @@ import org.apache.hadoop.hive.common.classification.InterfaceAudience;
 import org.apache.hadoop.hive.conf.HiveConf;
 import org.apache.hadoop.hive.metastore.annotation.NoReconnect;
 import org.apache.hadoop.hive.metastore.api.MetaException;
+import org.apache.hadoop.hive.metastore.conf.MetastoreConf;
 import org.apache.hadoop.hive.shims.Utils;
 import org.apache.hadoop.security.UserGroupInformation;
 import org.apache.hive.common.util.ShutdownHookManager;
@@ -322,7 +323,8 @@ class HiveClientCache {
     final private int threadId;
 
     private HiveClientCacheKey(HiveConf hiveConf, final int threadId) throws IOException, LoginException {
-      this.metaStoreURIs = hiveConf.getVar(HiveConf.ConfVars.METASTOREURIS);
+      this.metaStoreURIs =
+          MetastoreConf.getVar(hiveConf, MetastoreConf.ConfVars.THRIFT_URIS);
       ugi = Utils.getUGI();
       this.hiveConf = hiveConf;
       this.threadId = threadId;

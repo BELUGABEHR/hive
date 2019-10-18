@@ -52,16 +52,6 @@ import static org.apache.hive.common.util.HiveStringUtils.EQUALS;
 public class HiveConfUtil {
   private static final String CLASS_NAME = HiveConfUtil.class.getName();
   private static final Logger LOG = LoggerFactory.getLogger(CLASS_NAME);
-  /**
-   * Check if metastore is being used in embedded mode.
-   * This utility function exists so that the logic for determining the mode is same
-   * in HiveConf and HiveMetaStoreClient
-   * @param msUri - metastore server uri
-   * @return
-   */
-  public static boolean isEmbeddedMetaStore(String msUri) {
-    return (msUri == null) ? true : msUri.trim().isEmpty();
-  }
 
   /**
    * Dumps all HiveConf for debugging.  Convenient to dump state at process start up and log it

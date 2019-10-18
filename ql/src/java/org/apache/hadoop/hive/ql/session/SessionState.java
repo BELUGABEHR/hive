@@ -63,7 +63,6 @@ import org.apache.hadoop.hive.common.type.TimestampTZ;
 import org.apache.hadoop.hive.common.type.TimestampTZUtil;
 import org.apache.hadoop.hive.conf.HiveConf;
 import org.apache.hadoop.hive.conf.HiveConf.ConfVars;
-import org.apache.hadoop.hive.conf.HiveConfUtil;
 import org.apache.hadoop.hive.metastore.ObjectStore;
 import org.apache.hadoop.hive.metastore.PersistenceManagerProvider;
 import org.apache.hadoop.hive.metastore.Warehouse;
@@ -962,14 +961,15 @@ public class SessionState {
     if (sessionConf.get(CONFIG_AUTHZ_SETTINGS_APPLIED_MARKER, "").equals(Boolean.TRUE.toString())) {
       return;
     }
-    String metastoreHook = sessionConf.getVar(ConfVars.METASTORE_FILTER_HOOK);
-    if (!ConfVars.METASTORE_FILTER_HOOK.getDefaultValue().equals(metastoreHook) &&
+    String metastoreHook = MetastoreConf.getAsString(sessionConf,
+        MetastoreConf.ConfVars.FILTER_HOOK);
+    if (!MetastoreConf.ConfVars.FILTER_HOOK.getDefaultVal().equals(metastoreHook) &&
         !AuthorizationMetaStoreFilterHook.class.getName().equals(metastoreHook)) {
-      LOG.warn(ConfVars.METASTORE_FILTER_HOOK.varname +
+      LOG.warn(MetastoreConf.ConfVars.FILTER_HOOK +
           " will be ignored, since hive.security.authorization.manager" +
           " is set to instance of HiveAuthorizerFactory.");
     }
-    sessionConf.setVar(ConfVars.METASTORE_FILTER_HOOK,
+    MetastoreConf.setVar(sessionConf, MetastoreConf.ConfVars.FILTER_HOOK,
         AuthorizationMetaStoreFilterHook.class.getName());
 
     authorizerV2.applyAuthorizationConfigPolicy(sessionConf);
@@ -1812,7 +1812,7 @@ public class SessionState {
 
   private void unCacheDataNucleusClassLoaders() {
     try {
-      boolean isLocalMetastore = HiveConfUtil.isEmbeddedMetaStore(
+      boolean isLocalMetastore = MetastoreConf.isEmbeddedMetaStore(
           MetastoreConf.getVar(sessionConf, MetastoreConf.ConfVars.THRIFT_URIS));
       if (isLocalMetastore) {
 

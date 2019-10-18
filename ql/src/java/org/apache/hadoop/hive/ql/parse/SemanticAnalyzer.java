@@ -1790,7 +1790,6 @@ public class SemanticAnalyzer extends BaseSemanticAnalyzer {
         qb.getParseInfo().setNoScanAnalyzeCommand(this.noscan);
         // Allow analyze the whole table and dynamic partitions
         HiveConf.setVar(conf, HiveConf.ConfVars.DYNAMICPARTITIONINGMODE, "nonstrict");
-        HiveConf.setVar(conf, HiveConf.ConfVars.HIVEMAPREDMODE, "nonstrict");
 
         break;
 
@@ -13991,11 +13990,10 @@ public class SemanticAnalyzer extends BaseSemanticAnalyzer {
 
   // Process the position alias in GROUPBY and ORDERBY
   void processPositionAlias(ASTNode ast) throws SemanticException {
-    boolean isBothByPos = HiveConf.getBoolVar(conf, ConfVars.HIVE_GROUPBY_ORDERBY_POSITION_ALIAS);
-    boolean isGbyByPos = isBothByPos
-        || HiveConf.getBoolVar(conf, ConfVars.HIVE_GROUPBY_POSITION_ALIAS);
-    boolean isObyByPos = isBothByPos
-        || HiveConf.getBoolVar(conf, ConfVars.HIVE_ORDERBY_POSITION_ALIAS);
+    boolean isGbyByPos =
+        HiveConf.getBoolVar(conf, ConfVars.HIVE_GROUPBY_POSITION_ALIAS);
+    boolean isObyByPos =
+        HiveConf.getBoolVar(conf, ConfVars.HIVE_ORDERBY_POSITION_ALIAS);
 
     Deque<ASTNode> stack = new ArrayDeque<ASTNode>();
     stack.push(ast);

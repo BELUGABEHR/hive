@@ -413,7 +413,6 @@ public class TestOperators {
   public void testFetchOperatorContext() throws Exception {
     HiveConf conf = new HiveConf();
     conf.set("hive.support.concurrency", "false");
-    conf.setVar(HiveConf.ConfVars.HIVEMAPREDMODE, "nonstrict");
     conf.setVar(HiveConf.ConfVars.HIVE_AUTHORIZATION_MANAGER,
         "org.apache.hadoop.hive.ql.security.authorization.plugin.sqlstd.SQLStdHiveAuthorizerFactory");
     SessionState.start(conf);
