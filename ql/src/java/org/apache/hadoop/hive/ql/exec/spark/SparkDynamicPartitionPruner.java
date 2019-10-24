@@ -31,7 +31,6 @@ import java.util.Map;
 import java.util.Set;
 
 import com.google.common.base.Preconditions;
-import org.apache.hadoop.hive.ql.log.PerfLogger;
 import org.apache.hadoop.hive.ql.optimizer.spark.SparkPartitionPruningSinkDesc;
 import org.apache.hadoop.hive.ql.session.SessionState;
 import org.slf4j.Logger;
@@ -41,6 +40,8 @@ import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hive.ql.exec.ExprNodeEvaluator;
 import org.apache.hadoop.hive.ql.exec.ExprNodeEvaluatorFactory;
+import org.apache.hadoop.hive.ql.log.PerfTimedAction;
+import org.apache.hadoop.hive.ql.log.PerfTimer;
 import org.apache.hadoop.hive.ql.metadata.HiveException;
 import org.apache.hadoop.hive.ql.plan.ExprNodeDesc;
 import org.apache.hadoop.hive.ql.plan.MapWork;
@@ -66,9 +67,7 @@ import org.apache.hadoop.util.ReflectionUtils;
 public class SparkDynamicPartitionPruner {
 
   private static final Logger LOG = LoggerFactory.getLogger(SparkDynamicPartitionPruner.class);
-  private static final String CLASS_NAME = SparkDynamicPartitionPruner.class.getName();
 
-  private final PerfLogger perfLogger = SessionState.getPerfLogger();
   private final Map<String, List<SourceInfo>> sourceInfoMap = new LinkedHashMap<String, List<SourceInfo>>();
   private final BytesWritable writable = new BytesWritable();
 
@@ -79,12 +78,13 @@ public class SparkDynamicPartitionPruner {
       // Nothing to prune for this MapWork
       return;
     }
-    perfLogger.PerfLogBegin(CLASS_NAME,
-            PerfLogger.SPARK_DYNAMICALLY_PRUNE_PARTITIONS + work.getName());
-    processFiles(work, jobConf);
-    prunePartitions(work);
-    perfLogger.PerfLogBegin(CLASS_NAME,
-            PerfLogger.SPARK_DYNAMICALLY_PRUNE_PARTITIONS + work.getName());
+
+    try (PerfTimer initTimer = SessionState.getPerfTimer(
+        SparkDynamicPartitionPruner.class,
+        PerfTimedAction.SPARK_DYNAMICALLY_PRUNE_PARTITIONS, work.getName())) {
+      processFiles(work, jobConf);
+      prunePartitions(work);
+    }
   }
 
   public void initialize(MapWork work, JobConf jobConf) throws SerDeException {

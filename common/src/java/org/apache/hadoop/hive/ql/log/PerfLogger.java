@@ -36,7 +36,8 @@ import java.util.Map;
  *
  * Can be used to measure and log the time spent by a piece of code.
  */
-public class PerfLogger {
+@Deprecated
+public final class PerfLogger {
   public static final String ACQUIRE_READ_WRITE_LOCKS = "acquireReadWriteLocks";
   public static final String COMPILE = "compile";
   public static final String WAIT_COMPILE = "waitCompile";

@@ -31,7 +31,8 @@ import org.apache.tez.runtime.api.events.CustomProcessorEvent;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.hive.ql.log.PerfLogger;
+import org.apache.hadoop.hive.ql.log.PerfTimedAction;
+import org.apache.hadoop.hive.ql.log.PerfTimer;
 import org.apache.hadoop.hive.ql.session.SessionState;
 import org.apache.hadoop.mapred.JobConf;
 import org.apache.hadoop.mapred.OutputCollector;
@@ -69,9 +70,6 @@ public class TezProcessor extends AbstractLogicalIOProcessor {
   private final AtomicBoolean aborted = new AtomicBoolean(false);
 
   protected JobConf jobConf;
-
-  private static final String CLASS_NAME = TezProcessor.class.getName();
-  private final PerfLogger perfLogger = SessionState.getPerfLogger();
 
   // TODO: Replace with direct call to ProgressHelper, when reliably available.
   private static class ReflectiveProgressHelper {
@@ -172,16 +170,18 @@ public class TezProcessor extends AbstractLogicalIOProcessor {
 
   @Override
   public void initialize() throws IOException {
-    perfLogger.PerfLogBegin(CLASS_NAME, PerfLogger.TEZ_INITIALIZE_PROCESSOR);
-    Configuration conf = TezUtils.createConfFromUserPayload(getContext().getUserPayload());
-    this.jobConf = new JobConf(conf);
-    this.processorContext = getContext();
-    ExecutionContext execCtx = processorContext.getExecutionContext();
-    if (execCtx instanceof Hook) {
-      ((Hook)execCtx).initializeHook(this);
+    try (PerfTimer compileTimer = SessionState.getPerfTimer(TezProcessor.class,
+        PerfTimedAction.TEZ_INITIALIZE_PROCESSOR)) {
+      Configuration conf =
+          TezUtils.createConfFromUserPayload(getContext().getUserPayload());
+      this.jobConf = new JobConf(conf);
+      this.processorContext = getContext();
+      ExecutionContext execCtx = processorContext.getExecutionContext();
+      if (execCtx instanceof Hook) {
+        ((Hook) execCtx).initializeHook(this);
+      }
+      setupMRLegacyConfigs(processorContext);
     }
-    setupMRLegacyConfigs(processorContext);
-    perfLogger.PerfLogEnd(CLASS_NAME, PerfLogger.TEZ_INITIALIZE_PROCESSOR);
   }
 
   private void setupMRLegacyConfigs(ProcessorContext processorContext) {
@@ -216,38 +216,44 @@ public class TezProcessor extends AbstractLogicalIOProcessor {
       return;
     }
 
-    perfLogger.PerfLogBegin(CLASS_NAME, PerfLogger.TEZ_RUN_PROCESSOR);
-    // in case of broadcast-join read the broadcast edge inputs
-    // (possibly asynchronously)
+    try (PerfTimer compileTimer = SessionState.getPerfTimer(TezProcessor.class,
+        PerfTimedAction.TEZ_RUN_PROCESSOR)) {
 
-    if (LOG.isDebugEnabled()) {
-      LOG.debug("Running task: " + getContext().getUniqueIdentifier());
-    }
+      // in case of broadcast-join read the broadcast edge inputs
+      // (possibly asynchronously)
 
-    synchronized (this) {
-      // This check isn't absolutely mandatory, given the aborted check outside of the
-      // Processor creation.
-      if (aborted.get()) {
-        return;
+      if (LOG.isDebugEnabled()) {
+        LOG.debug("Running task: " + getContext().getUniqueIdentifier());
       }
 
-      // leverage TEZ-3437: Improve synchronization and the progress report behavior.
-      progressHelper = new ReflectiveProgressHelper(jobConf, inputs, getContext(), this.getClass().getSimpleName());
+      synchronized (this) {
+        // This check isn't absolutely mandatory, given the aborted check
+        // outside of the
+        // Processor creation.
+        if (aborted.get()) {
+          return;
+        }
 
+        // leverage TEZ-3437: Improve synchronization and the progress report
+        // behavior.
+        progressHelper = new ReflectiveProgressHelper(jobConf, inputs,
+            getContext(), this.getClass().getSimpleName());
 
-      // There should be no blocking operation in RecordProcessor creation,
-      // otherwise the abort operation will not register since they are synchronized on the same
-      // lock.
-      if (isMap) {
-        rproc = new MapRecordProcessor(jobConf, getContext());
-      } else {
-        rproc = new ReduceRecordProcessor(jobConf, getContext());
+        // There should be no blocking operation in RecordProcessor creation,
+        // otherwise the abort operation will not register since they are
+        // synchronized on the same
+        // lock.
+        if (isMap) {
+          rproc = new MapRecordProcessor(jobConf, getContext());
+        } else {
+          rproc = new ReduceRecordProcessor(jobConf, getContext());
+        }
       }
-    }
 
-    progressHelper.scheduleProgressTaskService(0, 100);
-    if (!aborted.get()) {
-      initializeAndRunProcessor(inputs, outputs);
+      progressHelper.scheduleProgressTaskService(0, 100);
+      if (!aborted.get()) {
+        initializeAndRunProcessor(inputs, outputs);
+      }
     }
     // TODO HIVE-14042. In case of an abort request, throw an InterruptedException
   }
@@ -267,7 +273,6 @@ public class TezProcessor extends AbstractLogicalIOProcessor {
       rproc.run();
 
       //done - output does not need to be committed as hive does not use outputcommitter
-      perfLogger.PerfLogEnd(CLASS_NAME, PerfLogger.TEZ_RUN_PROCESSOR);
     } catch (Throwable t) {
       originalThrowable = t;
     } finally {

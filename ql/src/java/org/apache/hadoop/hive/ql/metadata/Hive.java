@@ -180,6 +180,7 @@ import org.apache.hadoop.hive.ql.ErrorMsg;
 import org.apache.hadoop.hive.ql.exec.AbstractFileMergeOperator;
 import org.apache.hadoop.hive.ql.exec.FunctionRegistry;
 import org.apache.hadoop.hive.ql.exec.FunctionUtils;
+import org.apache.hadoop.hive.ql.exec.MoveTask;
 import org.apache.hadoop.hive.ql.exec.SerializationUtilities;
 import org.apache.hadoop.hive.ql.exec.Utilities;
 import org.apache.hadoop.hive.ql.io.AcidUtils;
@@ -187,7 +188,8 @@ import org.apache.hadoop.hive.ql.io.AcidUtils.TableSnapshot;
 import org.apache.hadoop.hive.ql.lockmgr.DbTxnManager;
 import org.apache.hadoop.hive.ql.lockmgr.HiveTxnManager;
 import org.apache.hadoop.hive.ql.lockmgr.LockException;
-import org.apache.hadoop.hive.ql.log.PerfLogger;
+import org.apache.hadoop.hive.ql.log.PerfTimer;
+import org.apache.hadoop.hive.ql.log.PerfTimedAction;
 import org.apache.hadoop.hive.ql.optimizer.calcite.RelOptHiveTable;
 import org.apache.hadoop.hive.ql.optimizer.calcite.rules.views.HiveAugmentMaterializationRule;
 import org.apache.hadoop.hive.ql.optimizer.listbucketingpruner.ListBucketingPrunerUtils;
@@ -2184,47 +2186,51 @@ public class Hive {
                                  boolean resetStatistics, Long writeId,
                                  int stmtId, boolean isInsertOverwrite) throws HiveException {
 
-    PerfLogger perfLogger = SessionState.getPerfLogger();
-    perfLogger.PerfLogBegin("MoveTask", PerfLogger.LOAD_PARTITION);
+    try (PerfTimer compileTimer = SessionState.getPerfTimer(MoveTask.class,
+        PerfTimedAction.LOAD_PARTITION)) {
 
-    // Get the partition object if it already exists
-    Partition oldPart = getPartition(tbl, partSpec, false);
-    boolean isTxnTable = AcidUtils.isTransactionalTable(tbl);
+      // Get the partition object if it already exists
+      Partition oldPart = getPartition(tbl, partSpec, false);
+      boolean isTxnTable = AcidUtils.isTransactionalTable(tbl);
 
-    // If config is set, table is not temporary and partition being inserted exists, capture
-    // the list of files added. For not yet existing partitions (insert overwrite to new partition
-    // or dynamic partition inserts), the add partition event will capture the list of files added.
-    List<Path> newFiles = Collections.synchronizedList(new ArrayList<>());
+      // If config is set, table is not temporary and partition being inserted
+      // exists, capture the list of files added. For not yet existing
+      // partitions (insert overwrite to new partition or dynamic partition
+      // inserts), the add partition event will capture the list of files added.
+      List<Path> newFiles = Collections.synchronizedList(new ArrayList<>());
 
-    Partition newTPart = loadPartitionInternal(loadPath, tbl, partSpec, oldPart,
-            loadFileType, inheritTableSpecs,
-            inheritLocation, isSkewedStoreAsSubdir, isSrcLocal, isAcidIUDoperation,
-            resetStatistics, writeId, stmtId, isInsertOverwrite, isTxnTable, newFiles);
+      Partition newTPart =
+          loadPartitionInternal(loadPath, tbl, partSpec, oldPart, loadFileType,
+              inheritTableSpecs, inheritLocation, isSkewedStoreAsSubdir,
+              isSrcLocal, isAcidIUDoperation, resetStatistics, writeId, stmtId,
+              isInsertOverwrite, isTxnTable, newFiles);
 
-    AcidUtils.TableSnapshot tableSnapshot = isTxnTable ? getTableSnapshot(tbl, writeId) : null;
-    if (tableSnapshot != null) {
-      newTPart.getTPartition().setWriteId(tableSnapshot.getWriteId());
-    }
-
-    if (oldPart == null) {
-      addPartitionToMetastore(newTPart, resetStatistics, tbl, tableSnapshot);
-      // For acid table, add the acid_write event with file list at the time of load itself. But
-      // it should be done after partition is created.
-      if (isTxnTable && (null != newFiles)) {
-        addWriteNotificationLog(tbl, partSpec, newFiles, writeId);
+      AcidUtils.TableSnapshot tableSnapshot =
+          isTxnTable ? getTableSnapshot(tbl, writeId) : null;
+      if (tableSnapshot != null) {
+        newTPart.getTPartition().setWriteId(tableSnapshot.getWriteId());
       }
-    } else {
-      try {
-        setStatsPropAndAlterPartition(resetStatistics, tbl, newTPart, tableSnapshot);
-      } catch (TException e) {
-        LOG.error(StringUtils.stringifyException(e));
-        throw new HiveException(e);
+
+      if (oldPart == null) {
+        addPartitionToMetastore(newTPart, resetStatistics, tbl, tableSnapshot);
+        // For acid table, add the acid_write event with file list at the time
+        // of load itself. But
+        // it should be done after partition is created.
+        if (isTxnTable && (null != newFiles)) {
+          addWriteNotificationLog(tbl, partSpec, newFiles, writeId);
+        }
+      } else {
+        try {
+          setStatsPropAndAlterPartition(resetStatistics, tbl, newTPart,
+              tableSnapshot);
+        } catch (TException e) {
+          LOG.error(StringUtils.stringifyException(e));
+          throw new HiveException(e);
+        }
       }
+
+      return newTPart;
     }
-
-    perfLogger.PerfLogEnd("MoveTask", PerfLogger.LOAD_PARTITION);
-
-    return newTPart;
   }
 
   /**
@@ -2276,8 +2282,6 @@ public class Hive {
     assert tbl.getPath() != null : "null==getPath() for " + tbl.getTableName();
     boolean isFullAcidTable = AcidUtils.isFullAcidTable(tbl);
     try {
-      PerfLogger perfLogger = SessionState.getPerfLogger();
-
       /**
        * Move files before creating the partition since down stream processes
        * check for existence of partition in metadata before accessing the data.
@@ -2310,7 +2314,8 @@ public class Hive {
           ? genPartPathFromTable(tbl, partSpec, tblDataLocationPath) : oldPartPath;
       }
 
-      perfLogger.PerfLogBegin("MoveTask", PerfLogger.FILE_MOVES);
+      PerfTimer moveTimer = SessionState.getPerfTimer(MoveTask.class,
+          PerfTimedAction.FILE_MOVES);
 
       // Note: the stats for ACID tables do not have any coordination with either Hive ACID logic
       //       like txn commits, time outs, etc.; nor the lower level sync in metastore pertaining
@@ -2364,7 +2369,7 @@ public class Hive {
               tbl.getNumBuckets() > 0, isFullAcidTable, isManaged);
         }
       }
-      perfLogger.PerfLogEnd("MoveTask", PerfLogger.FILE_MOVES);
+      moveTimer.close();
       Partition newTPart = oldPart != null ? oldPart : new Partition(tbl, partSpec, newPartPath);
       alterPartitionSpecInMemory(tbl, partSpec, newTPart.getTPartition(), inheritTableSpecs, newPartPath.toString());
       validatePartition(newTPart);
@@ -2826,8 +2831,8 @@ private void constructOneLBLocationMap(FileStatus fSta,
       final boolean resetStatistics, final AcidUtils.Operation operation,
       boolean isInsertOverwrite) throws HiveException {
 
-    PerfLogger perfLogger = SessionState.getPerfLogger();
-    perfLogger.PerfLogBegin("MoveTask", PerfLogger.LOAD_DYNAMIC_PARTITIONS);
+    PerfTimer moveTimer = SessionState.getPerfTimer(MoveTask.class,
+        PerfTimedAction.LOAD_DYNAMIC_PARTITIONS);
 
     // Get all valid partition paths and existing partitions for them (if any)
     final Table tbl = getTable(tableName);
@@ -3018,7 +3023,7 @@ private void constructOneLBLocationMap(FileStatus fSta,
       }
       LOG.info("Loaded " + result.size() + "partitionsToAdd");
 
-      perfLogger.PerfLogEnd("MoveTask", PerfLogger.LOAD_DYNAMIC_PARTITIONS);
+      moveTimer.close();
 
       return result;
     } catch (TException te) {
@@ -3054,8 +3059,8 @@ private void constructOneLBLocationMap(FileStatus fSta,
       boolean isSkewedStoreAsSubdir, boolean isAcidIUDoperation, boolean resetStatistics,
       Long writeId, int stmtId, boolean isInsertOverwrite) throws HiveException {
 
-    PerfLogger perfLogger = SessionState.getPerfLogger();
-    perfLogger.PerfLogBegin("MoveTask", PerfLogger.LOAD_TABLE);
+    PerfTimer loadTimer = SessionState.getPerfTimer(MoveTask.class,
+        PerfTimedAction.LOAD_TABLE);
 
     List<Path> newFiles = null;
     Table tbl = getTable(tableName);
@@ -3100,8 +3105,6 @@ private void constructOneLBLocationMap(FileStatus fSta,
       Utilities.FILE_OP_LOGGER.debug("moving " + loadPath + " to " + tblPath
           + " (replace = " + loadFileType + ")");
 
-      perfLogger.PerfLogBegin("MoveTask", PerfLogger.FILE_MOVES);
-
       boolean isManaged = tbl.getTableType() == TableType.MANAGED_TABLE;
 
       if (loadFileType == LoadFileType.REPLACE_ALL && !isTxnTable) {
@@ -3121,7 +3124,7 @@ private void constructOneLBLocationMap(FileStatus fSta,
           throw new HiveException("addFiles: filesystem error in check phase", e);
         }
       }
-      perfLogger.PerfLogEnd("MoveTask", PerfLogger.FILE_MOVES);
+      loadTimer.close();
     }
     if (!this.getConf().getBoolVar(HiveConf.ConfVars.HIVESTATSAUTOGATHER)) {
       LOG.debug("setting table statistics false for " + tbl.getDbName() + "." + tbl.getTableName());
@@ -3163,7 +3166,7 @@ private void constructOneLBLocationMap(FileStatus fSta,
       fireInsertEvent(tbl, null, (loadFileType == LoadFileType.REPLACE_ALL), newFiles);
     }
 
-    perfLogger.PerfLogEnd("MoveTask", PerfLogger.LOAD_TABLE);
+    loadTimer.close();
   }
 
   /**

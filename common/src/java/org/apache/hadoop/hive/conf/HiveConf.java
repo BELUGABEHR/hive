@@ -3170,6 +3170,10 @@ public class HiveConf extends Configuration {
     HIVE_PERF_LOGGER("hive.exec.perf.logger", "org.apache.hadoop.hive.ql.log.PerfLogger",
         "The class responsible for logging client side performance metrics. \n" +
         "Must be a subclass of org.apache.hadoop.hive.ql.log.PerfLogger"),
+    HIVE_PERF_LOGGER_V2("hive.exec.perf.loggerv2",
+        "org.apache.hadoop.hive.ql.log.MetricsPerfLogger",
+        "The class responsible for logging client side performance metrics. \n"
+            + "Must be a subclass of org.apache.hadoop.hive.ql.log.PerfTimerLogger"),
     HIVE_START_CLEANUP_SCRATCHDIR("hive.start.cleanup.scratchdir", false,
         "To cleanup the Hive scratchdir when starting the Hive Server"),
     HIVE_SCRATCH_DIR_LOCK("hive.scratchdir.lock", false,

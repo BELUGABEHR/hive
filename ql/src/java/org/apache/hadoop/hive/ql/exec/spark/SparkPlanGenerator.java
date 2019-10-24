@@ -18,19 +18,13 @@
 
 package org.apache.hadoop.hive.ql.exec.spark;
 
-import java.io.File;
-import java.io.FileNotFoundException;
 import java.io.IOException;
-import java.lang.reflect.InvocationTargetException;
-import java.net.MalformedURLException;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 
-import org.apache.hive.spark.client.SparkClientUtilities;
-import org.apache.spark.SparkConf;
 import org.apache.spark.util.CallSite;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -41,7 +35,8 @@ import org.apache.hadoop.hive.common.JavaUtils;
 import org.apache.hadoop.hive.ql.io.merge.MergeFileMapper;
 import org.apache.hadoop.hive.ql.io.merge.MergeFileOutputFormat;
 import org.apache.hadoop.hive.ql.io.merge.MergeFileWork;
-import org.apache.hadoop.hive.ql.log.PerfLogger;
+import org.apache.hadoop.hive.ql.log.PerfTimedAction;
+import org.apache.hadoop.hive.ql.log.PerfTimer;
 import org.apache.hadoop.hive.ql.session.SessionState;
 import org.apache.hadoop.mapred.FileOutputFormat;
 import org.apache.hadoop.hive.conf.HiveConf;
@@ -75,10 +70,8 @@ import com.google.common.base.Preconditions;
 @SuppressWarnings("rawtypes")
 public class SparkPlanGenerator {
 
-  private static final String CLASS_NAME = SparkPlanGenerator.class.getName();
   private static final Logger LOG = LoggerFactory.getLogger(SparkPlanGenerator.class);
 
-  private final PerfLogger perfLogger = SessionState.getPerfLogger();
   private final JavaSparkContext sc;
   private final JobConf jobConf;
   private final Context context;
@@ -114,33 +107,34 @@ public class SparkPlanGenerator {
   }
 
   public SparkPlan generate(SparkWork sparkWork) throws Exception {
-    perfLogger.PerfLogBegin(CLASS_NAME, PerfLogger.SPARK_BUILD_PLAN);
-    SparkPlan sparkPlan = new SparkPlan(this.jobConf, this.sc.sc());
-    cloneToWork = sparkWork.getCloneToWork();
-    workToTranMap.clear();
-    workToParentWorkTranMap.clear();
+    try (PerfTimer generateTimer = SessionState.getPerfTimer(
+        SparkPlanGenerator.class, PerfTimedAction.SPARK_BUILD_PLAN)) {
+      SparkPlan sparkPlan = new SparkPlan(this.jobConf, this.sc.sc());
+      cloneToWork = sparkWork.getCloneToWork();
+      workToTranMap.clear();
+      workToParentWorkTranMap.clear();
 
-    try {
       for (BaseWork work : sparkWork.getAllWork()) {
-        // Run the SparkDynamicPartitionPruner, we run this here instead of inside the
-        // InputFormat so that we don't have to run pruning when creating a Record Reader
-        runDynamicPartitionPruner(work);
-        perfLogger.PerfLogBegin(CLASS_NAME, PerfLogger.SPARK_CREATE_TRAN + work.getName());
-        SparkTran tran = generate(work, sparkWork);
-        SparkTran parentTran = generateParentTran(sparkPlan, sparkWork, work);
-        sparkPlan.addTran(tran);
-        sparkPlan.connect(parentTran, tran);
-        workToTranMap.put(work, tran);
-        perfLogger.PerfLogEnd(CLASS_NAME, PerfLogger.SPARK_CREATE_TRAN + work.getName());
+        try (PerfTimer tranTimer =
+            SessionState.getPerfTimer(SparkPlanGenerator.class,
+                PerfTimedAction.SPARK_CREATE_TRAN, work.getName())) {
+          // Run the SparkDynamicPartitionPruner, we run this here instead of
+          // inside the InputFormat so that we don't have to run pruning when
+          // creating a Record Reader
+          runDynamicPartitionPruner(work);
+          SparkTran tran = generate(work, sparkWork);
+          SparkTran parentTran = generateParentTran(sparkPlan, sparkWork, work);
+          sparkPlan.addTran(tran);
+          sparkPlan.connect(parentTran, tran);
+          workToTranMap.put(work, tran);
+        }
       }
+      return sparkPlan;
     } finally {
       // clear all ThreadLocal cached MapWork/ReduceWork after plan generation
       // as this may executed in a pool thread.
       Utilities.clearWorkMap(jobConf);
     }
-
-    perfLogger.PerfLogEnd(CLASS_NAME, PerfLogger.SPARK_BUILD_PLAN);
-    return sparkPlan;
   }
 
   /**

@@ -25,10 +25,8 @@ import java.util.Map.Entry;
 import org.apache.hadoop.hive.ql.exec.ObjectCache;
 import org.apache.hadoop.hive.ql.exec.Utilities;
 import org.apache.hadoop.hive.ql.exec.tez.TezProcessor.TezKVOutputCollector;
-import org.apache.hadoop.hive.ql.log.PerfLogger;
 import org.apache.hadoop.hive.ql.metadata.HiveException;
 import org.apache.hadoop.hive.ql.plan.BaseWork;
-import org.apache.hadoop.hive.ql.session.SessionState;
 import org.apache.hadoop.mapred.JobConf;
 import org.apache.hadoop.mapred.OutputCollector;
 import org.apache.tez.mapreduce.processor.MRTaskReporter;
@@ -54,9 +52,6 @@ public abstract class RecordProcessor extends InterruptibleProcessing {
   private static final Logger LOG = LoggerFactory.getLogger(RecordProcessor.class);
 
   protected MRTaskReporter reporter;
-
-  protected PerfLogger perfLogger = SessionState.getPerfLogger();
-  protected String CLASS_NAME = RecordProcessor.class.getName();
 
   public RecordProcessor(JobConf jConf, ProcessorContext processorContext) {
     this.jconf = jConf;

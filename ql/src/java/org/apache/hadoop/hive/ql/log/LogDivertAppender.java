@@ -87,6 +87,7 @@ public class LogDivertAppender {
 
     /* Patterns that are included in performance logging level.
      * In performance mode, show execution and performance logger messages.
+     * TODO: This is very brittle. Users can supply a custom logger class
      */
     private static final Pattern performanceIncludeNamePattern = Pattern.compile(
         executionIncludeNamePattern.pattern() + "|" + PerfLogger.class.getName());

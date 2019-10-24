@@ -67,6 +67,8 @@ import org.apache.hadoop.hive.ql.exec.spark.status.SparkJobRef;
 import org.apache.hadoop.hive.ql.exec.spark.status.SparkJobStatus;
 import org.apache.hadoop.hive.ql.exec.spark.status.SparkStageProgress;
 import org.apache.hadoop.hive.ql.history.HiveHistory.Keys;
+import org.apache.hadoop.hive.ql.log.PerfTimer;
+import org.apache.hadoop.hive.ql.log.PerfTimedAction;
 import org.apache.hadoop.hive.ql.log.PerfLogger;
 import org.apache.hadoop.hive.ql.metadata.HiveException;
 import org.apache.hadoop.hive.ql.plan.BaseWork;
@@ -82,8 +84,7 @@ import org.apache.hadoop.util.StringUtils;
 import com.google.common.collect.Lists;
 
 public class SparkTask extends Task<SparkWork> {
-  private static final String CLASS_NAME = SparkTask.class.getName();
-  private static final Logger LOG = LoggerFactory.getLogger(CLASS_NAME);
+  private static final Logger LOG = LoggerFactory.getLogger(SparkTask.class);
   private static final LogHelper console = new LogHelper(LOG);
   private PerfLogger perfLogger;
   private static final long serialVersionUID = 1L;
@@ -125,10 +126,10 @@ public class SparkTask extends Task<SparkWork> {
       sparkWork.setRequiredCounterPrefix(getOperatorCounters());
 
       // Submit the Spark job
-      perfLogger.PerfLogBegin(CLASS_NAME, PerfLogger.SPARK_SUBMIT_JOB);
-      submitTime = perfLogger.getStartTime(PerfLogger.SPARK_SUBMIT_JOB);
-      jobRef = sparkSession.submit(driverContext, sparkWork);
-      perfLogger.PerfLogEnd(CLASS_NAME, PerfLogger.SPARK_SUBMIT_JOB);
+      try (PerfTimer compileTimer = SessionState.getPerfTimer(SparkTask.class,
+          PerfTimedAction.SPARK_SUBMIT_JOB)) {
+        jobRef = sparkSession.submit(driverContext, sparkWork);
+      }
 
       // If the driver context has been shutdown (due to query cancellation) kill the Spark job
       if (driverContext.isShutdown()) {
@@ -143,7 +144,7 @@ public class SparkTask extends Task<SparkWork> {
       // Add Spark job handle id to the Hive History
       addToHistory(Keys.SPARK_JOB_HANDLE_ID, jobRef.getJobId());
 
-      LOG.debug("Starting Spark job with job handle id " + sparkJobHandleId);
+      LOG.debug("Starting Spark job with job handle id {}", sparkJobHandleId);
 
       // Get the application id of the Spark app
       jobID = jobRef.getSparkJobStatus().getAppID();

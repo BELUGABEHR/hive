@@ -37,7 +37,8 @@ import org.apache.hadoop.hive.ql.exec.SerializationUtilities;
 import org.apache.hadoop.hive.ql.exec.TableScanOperator;
 import org.apache.hadoop.hive.ql.exec.Utilities;
 import org.apache.hadoop.hive.ql.exec.vector.VectorizedRowBatch;
-import org.apache.hadoop.hive.ql.log.PerfLogger;
+import org.apache.hadoop.hive.ql.log.PerfTimedAction;
+import org.apache.hadoop.hive.ql.log.PerfTimer;
 import org.apache.hadoop.hive.ql.metadata.HiveException;
 import org.apache.hadoop.hive.ql.metadata.HiveStoragePredicateHandler;
 import org.apache.hadoop.hive.ql.plan.ExprNodeGenericFuncDesc;
@@ -89,8 +90,7 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 public class HiveInputFormat<K extends WritableComparable, V extends Writable>
     implements InputFormat<K, V>, JobConfigurable {
-  private static final String CLASS_NAME = HiveInputFormat.class.getName();
-  private static final Logger LOG = LoggerFactory.getLogger(CLASS_NAME);
+  private static final Logger LOG = LoggerFactory.getLogger(HiveInputFormat.class);
 
   /**
    * A cache of InputFormat instances.
@@ -672,8 +672,13 @@ public class HiveInputFormat<K extends WritableComparable, V extends Writable>
 
   @Override
   public InputSplit[] getSplits(JobConf job, int numSplits) throws IOException {
-    PerfLogger perfLogger = SessionState.getPerfLogger();
-    perfLogger.PerfLogBegin(CLASS_NAME, PerfLogger.GET_SPLITS);
+    try (PerfTimer splitTimer = SessionState.getPerfTimer(HiveInputFormat.class,
+        PerfTimedAction.GET_SPLITS)) {
+      return doGetSplits(job, numSplits);
+    }
+  }
+
+  protected InputSplit[] doGetSplits(JobConf job, int numSplits) throws IOException {
     init(job);
     Path[] dirs = getInputPaths(job);
     JobConf newjob = new JobConf(job);
@@ -770,7 +775,6 @@ public class HiveInputFormat<K extends WritableComparable, V extends Writable>
     if (LOG.isInfoEnabled()) {
       LOG.info("number of splits " + result.size());
     }
-    perfLogger.PerfLogEnd(CLASS_NAME, PerfLogger.GET_SPLITS);
     return result.toArray(new HiveInputSplit[result.size()]);
   }
 

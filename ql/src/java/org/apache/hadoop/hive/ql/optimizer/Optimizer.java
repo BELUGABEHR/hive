@@ -52,7 +52,7 @@ import com.google.common.collect.Sets;
 public class Optimizer {
   private ParseContext pctx;
   private List<Transform> transformations;
-  private static final Logger LOG = LoggerFactory.getLogger(Optimizer.class.getName());
+  private static final Logger LOG = LoggerFactory.getLogger(Optimizer.class);
 
   /**
    * Create the list of transformations.
@@ -243,7 +243,8 @@ public class Optimizer {
     for (Transform t : transformations) {
       t.beginPerfLogging();
       pctx = t.transform(pctx);
-      t.endPerfLogging(t.toString());
+      t.endPerfLogging();
+      LOG.debug("Transform: {}", t);
     }
     return pctx;
   }

@@ -37,7 +37,8 @@ import org.apache.hadoop.hive.metastore.api.MetaException;
 import org.apache.hadoop.hive.ql.exec.ExprNodeEvaluator;
 import org.apache.hadoop.hive.ql.exec.FunctionRegistry;
 import org.apache.hadoop.hive.ql.exec.TableScanOperator;
-import org.apache.hadoop.hive.ql.log.PerfLogger;
+import org.apache.hadoop.hive.ql.log.PerfTimer;
+import org.apache.hadoop.hive.ql.log.PerfTimedAction;
 import org.apache.hadoop.hive.ql.metadata.Hive;
 import org.apache.hadoop.hive.ql.metadata.HiveException;
 import org.apache.hadoop.hive.ql.metadata.Partition;
@@ -75,9 +76,7 @@ import org.apache.hadoop.hive.ql.plan.ExprNodeDescUtils;
  */
 public class PartitionPruner extends Transform {
 
-  // The log
-  public static final String CLASS_NAME = PartitionPruner.class.getName();
-  public static final Logger LOG = LoggerFactory.getLogger(CLASS_NAME);
+  public static final Logger LOG = LoggerFactory.getLogger(PartitionPruner.class);
 
   /*
    * (non-Javadoc)
@@ -447,18 +446,15 @@ public class PartitionPruner extends Transform {
       // Now filter.
       List<Partition> partitions = new ArrayList<Partition>();
       boolean hasUnknownPartitions = false;
-      PerfLogger perfLogger = SessionState.getPerfLogger();
       if (!doEvalClientSide) {
-        perfLogger.PerfLogBegin(CLASS_NAME, PerfLogger.PARTITION_RETRIEVING);
-        try {
+        try (PerfTimer runJobTimer = SessionState.getPerfTimer(PartitionPruner.class,
+            PerfTimedAction.PARTITION_RETRIEVING)) {
           hasUnknownPartitions = Hive.get().getPartitionsByExpr(
               tab, compactExpr, conf, partitions);
         } catch (IMetaStoreClient.IncompatibleMetastoreException ime) {
           // TODO: backward compat for Hive <= 0.12. Can be removed later.
           LOG.warn("Metastore doesn't support getPartitionsByExpr", ime);
           doEvalClientSide = true;
-        } finally {
-          perfLogger.PerfLogEnd(CLASS_NAME, PerfLogger.PARTITION_RETRIEVING);
         }
       }
       if (doEvalClientSide) {
@@ -479,12 +475,13 @@ public class PartitionPruner extends Transform {
     }
   }
 
-  private static Set<Partition> getAllPartitions(Table tab) throws HiveException {
-    PerfLogger perfLogger = SessionState.getPerfLogger();
-    perfLogger.PerfLogBegin(CLASS_NAME, PerfLogger.PARTITION_RETRIEVING);
-    Set<Partition> result = Hive.get().getAllPartitionsOf(tab);
-    perfLogger.PerfLogEnd(CLASS_NAME, PerfLogger.PARTITION_RETRIEVING);
-    return result;
+  private static Set<Partition> getAllPartitions(Table tab)
+      throws HiveException {
+    try (
+        PerfTimer runJobTimer = SessionState.getPerfTimer(PartitionPruner.class,
+            PerfTimedAction.PARTITION_RETRIEVING)) {
+      return Hive.get().getAllPartitionsOf(tab);
+    }
   }
 
   /**
@@ -496,27 +493,36 @@ public class PartitionPruner extends Transform {
    * @param conf Hive Configuration object, can not be NULL.
    * @return true iff the partition pruning expression contains non-partition columns.
    */
-  static private boolean pruneBySequentialScan(Table tab, List<Partition> partitions,
-      ExprNodeGenericFuncDesc prunerExpr, HiveConf conf) throws HiveException, MetaException {
-    PerfLogger perfLogger = SessionState.getPerfLogger();
-    perfLogger.PerfLogBegin(CLASS_NAME, PerfLogger.PRUNE_LISTING);
+  static private boolean pruneBySequentialScan(Table tab,
+      List<Partition> partitions, ExprNodeGenericFuncDesc prunerExpr,
+      HiveConf conf) throws HiveException, MetaException {
 
-    List<String> partNames = Hive.get().getPartitionNames(
-        tab.getDbName(), tab.getTableName(), (short) -1);
+    final boolean hasUnknownPartitions;
+    final List<String> partNames;
 
-    String defaultPartitionName = conf.getVar(HiveConf.ConfVars.DEFAULTPARTITIONNAME);
-    List<String> partCols = extractPartColNames(tab);
-    List<PrimitiveTypeInfo> partColTypeInfos = extractPartColTypes(tab);
+    try (PerfTimer runJobTimer = SessionState
+        .getPerfTimer(PartitionPruner.class, PerfTimedAction.PRUNE_LISTING)) {
 
-    boolean hasUnknownPartitions = prunePartitionNames(
-        partCols, partColTypeInfos, prunerExpr, defaultPartitionName, partNames);
-    perfLogger.PerfLogEnd(CLASS_NAME, PerfLogger.PRUNE_LISTING);
+      partNames = Hive.get().getPartitionNames(tab.getDbName(),
+          tab.getTableName(), (short) -1);
 
-    perfLogger.PerfLogBegin(CLASS_NAME, PerfLogger.PARTITION_RETRIEVING);
-    if (!partNames.isEmpty()) {
-      partitions.addAll(Hive.get().getPartitionsByNames(tab, partNames));
+      String defaultPartitionName =
+          conf.getVar(HiveConf.ConfVars.DEFAULTPARTITIONNAME);
+      List<String> partCols = extractPartColNames(tab);
+      List<PrimitiveTypeInfo> partColTypeInfos = extractPartColTypes(tab);
+
+      hasUnknownPartitions = prunePartitionNames(partCols, partColTypeInfos,
+          prunerExpr, defaultPartitionName, partNames);
     }
-    perfLogger.PerfLogEnd(CLASS_NAME, PerfLogger.PARTITION_RETRIEVING);
+
+    try (
+        PerfTimer runJobTimer = SessionState.getPerfTimer(PartitionPruner.class,
+            PerfTimedAction.PARTITION_RETRIEVING)) {
+
+      if (!partNames.isEmpty()) {
+        partitions.addAll(Hive.get().getPartitionsByNames(tab, partNames));
+      }
+    }
     return hasUnknownPartitions;
   }
 

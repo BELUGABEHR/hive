@@ -17,7 +17,6 @@
  */
 package org.apache.hadoop.hive.ql.parse.spark;
 
-import java.io.Serializable;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -60,7 +59,8 @@ import org.apache.hadoop.hive.ql.lib.PreOrderWalker;
 import org.apache.hadoop.hive.ql.lib.Rule;
 import org.apache.hadoop.hive.ql.lib.RuleRegExp;
 import org.apache.hadoop.hive.ql.lib.TypeRule;
-import org.apache.hadoop.hive.ql.log.PerfLogger;
+import org.apache.hadoop.hive.ql.log.PerfTimer;
+import org.apache.hadoop.hive.ql.log.PerfTimedAction;
 import org.apache.hadoop.hive.ql.optimizer.ConstantPropagate;
 import org.apache.hadoop.hive.ql.optimizer.ConstantPropagateProcCtx;
 import org.apache.hadoop.hive.ql.optimizer.DynamicPartitionPruningOptimization;
@@ -101,8 +101,6 @@ import org.apache.hadoop.hive.ql.session.SessionState;
  * Cloned from TezCompiler.
  */
 public class SparkCompiler extends TaskCompiler {
-  private static final String CLASS_NAME = SparkCompiler.class.getName();
-  private static final PerfLogger PERF_LOGGER = SessionState.getPerfLogger();
 
   public SparkCompiler() {
   }
@@ -110,54 +108,62 @@ public class SparkCompiler extends TaskCompiler {
   @Override
   protected void optimizeOperatorPlan(ParseContext pCtx, Set<ReadEntity> inputs,
       Set<WriteEntity> outputs) throws SemanticException {
-    PERF_LOGGER.PerfLogBegin(CLASS_NAME, PerfLogger.SPARK_OPTIMIZE_OPERATOR_TREE);
 
-    OptimizeSparkProcContext procCtx = new OptimizeSparkProcContext(conf, pCtx, inputs, outputs);
+    try (PerfTimer runJobTimer = SessionState.getPerfTimer(SparkCompiler.class,
+        PerfTimedAction.SPARK_OPTIMIZE_OPERATOR_TREE)) {
 
-    // Run Spark Dynamic Partition Pruning
-    runDynamicPartitionPruning(procCtx);
+      OptimizeSparkProcContext procCtx =
+          new OptimizeSparkProcContext(conf, pCtx, inputs, outputs);
 
-    // Annotation OP tree with statistics
-    runStatsAnnotation(procCtx);
+      // Run Spark Dynamic Partition Pruning
+      runDynamicPartitionPruning(procCtx);
 
-    // Run Dynamic Partitioning sort Optimization.
-    runDynPartitionSortOptimizations(procCtx);
+      // Annotation OP tree with statistics
+      runStatsAnnotation(procCtx);
 
-    // Set reducer parallelism
-    runSetReducerParallelism(procCtx);
+      // Run Dynamic Partitioning sort Optimization.
+      runDynPartitionSortOptimizations(procCtx);
 
-    // Run Join releated optimizations
-    runJoinOptimizations(procCtx);
+      // Set reducer parallelism
+      runSetReducerParallelism(procCtx);
 
-    if(conf.isSparkDPPAny()){
-      // Remove DPP based on expected size of the output data
-      runRemoveDynamicPruning(procCtx);
+      // Run Join releated optimizations
+      runJoinOptimizations(procCtx);
 
-      // Remove cyclic dependencies for DPP
-      runCycleAnalysisForPartitionPruning(procCtx);
+      if (conf.isSparkDPPAny()) {
+        // Remove DPP based on expected size of the output data
+        runRemoveDynamicPruning(procCtx);
 
-      // Remove nested DPPs
-      SparkUtilities.removeNestedDPP(procCtx);
+        // Remove cyclic dependencies for DPP
+        runCycleAnalysisForPartitionPruning(procCtx);
+
+        // Remove nested DPPs
+        SparkUtilities.removeNestedDPP(procCtx);
+      }
+
+      // Re-run constant propagation so we fold any new constants introduced by
+      // the operator optimizers Specifically necessary for DPP because we
+      // might have created lots of "and true and true" conditions
+      if (procCtx.getConf()
+          .getBoolVar(HiveConf.ConfVars.HIVEOPTCONSTANTPROPAGATION)) {
+        new ConstantPropagate(
+            ConstantPropagateProcCtx.ConstantPropagateOption.SHORTCUT)
+                .transform(pCtx);
+      }
+
+      // ATTENTION : DO NOT, I REPEAT, DO NOT WRITE ANYTHING AFTER
+      // updateBucketingVersionForUpgrade()
+      // ANYTHING WHICH NEEDS TO BE ADDED MUST BE ADDED ABOVE
+      // This call updates the bucketing version of final ReduceSinkOp based on
+      // the bucketing version of FileSinkOp. This operation must happen at the
+      // end to ensure there is no further rewrite of plan which may end up
+      // removing/updating the ReduceSinkOp as was the case with
+      // SortedDynPartitionOptimizer
+      // Update bucketing version of ReduceSinkOp if needed
+      // Note: This has been copied here from TezCompiler, change seems needed
+      // for bucketing to work properly moving forward.
+      updateBucketingVersionForUpgrade(procCtx);
     }
-
-    // Re-run constant propagation so we fold any new constants introduced by the operator optimizers
-    // Specifically necessary for DPP because we might have created lots of "and true and true" conditions
-    if (procCtx.getConf().getBoolVar(HiveConf.ConfVars.HIVEOPTCONSTANTPROPAGATION)) {
-      new ConstantPropagate(ConstantPropagateProcCtx.ConstantPropagateOption.SHORTCUT).transform(pCtx);
-    }
-
-    // ATTENTION : DO NOT, I REPEAT, DO NOT WRITE ANYTHING AFTER updateBucketingVersionForUpgrade()
-    // ANYTHING WHICH NEEDS TO BE ADDED MUST BE ADDED ABOVE
-    // This call updates the bucketing version of final ReduceSinkOp based on
-    // the bucketing version of FileSinkOp. This operation must happen at the
-    // end to ensure there is no further rewrite of plan which may end up
-    // removing/updating the ReduceSinkOp as was the case with SortedDynPartitionOptimizer
-    // Update bucketing version of ReduceSinkOp if needed
-    // Note: This has been copied here from TezCompiler, change seems needed for bucketing to work
-    // properly moving forward.
-    updateBucketingVersionForUpgrade(procCtx);
-
-    PERF_LOGGER.PerfLogEnd(CLASS_NAME, PerfLogger.SPARK_OPTIMIZE_OPERATOR_TREE);
   }
 
   private void runRemoveDynamicPruning(OptimizeSparkProcContext procCtx) throws SemanticException {
@@ -364,76 +370,84 @@ public class SparkCompiler extends TaskCompiler {
   protected void generateTaskTree(List<Task<?>> rootTasks, ParseContext pCtx,
       List<Task<MoveWork>> mvTask, Set<ReadEntity> inputs, Set<WriteEntity> outputs)
       throws SemanticException {
-    PERF_LOGGER.PerfLogBegin(CLASS_NAME, PerfLogger.SPARK_GENERATE_TASK_TREE);
+    try (PerfTimer runJobTimer = SessionState.getPerfTimer(SparkCompiler.class,
+        PerfTimedAction.SPARK_GENERATE_TASK_TREE)) {
 
-    GenSparkUtils utils = GenSparkUtils.getUtils();
-    utils.resetSequenceNumber();
+      GenSparkUtils utils = GenSparkUtils.getUtils();
+      utils.resetSequenceNumber();
 
-    ParseContext tempParseContext = getParseContext(pCtx, rootTasks);
-    GenSparkProcContext procCtx = new GenSparkProcContext(
-        conf, tempParseContext, mvTask, rootTasks, inputs, outputs, pCtx.getTopOps());
+      ParseContext tempParseContext = getParseContext(pCtx, rootTasks);
+      GenSparkProcContext procCtx =
+          new GenSparkProcContext(conf, tempParseContext, mvTask, rootTasks,
+              inputs, outputs, pCtx.getTopOps());
 
-    // -------------------------------- First Pass ---------------------------------- //
-    // Identify SparkPartitionPruningSinkOperators, and break OP tree if necessary
+      // ------------ First Pass ------------------- //
+      // Identify SparkPartitionPruningSinkOperators, and break OP tree if
+      // necessary
 
-    Map<Rule, NodeProcessor> opRules = new LinkedHashMap<Rule, NodeProcessor>();
-    opRules.put(new RuleRegExp("Clone OP tree for PartitionPruningSink",
-            SparkPartitionPruningSinkOperator.getOperatorName() + "%"),
-        new SplitOpTreeForDPP());
+      Map<Rule, NodeProcessor> opRules =
+          new LinkedHashMap<Rule, NodeProcessor>();
+      opRules.put(
+          new RuleRegExp("Clone OP tree for PartitionPruningSink",
+              SparkPartitionPruningSinkOperator.getOperatorName() + "%"),
+          new SplitOpTreeForDPP());
 
-    Dispatcher disp = new DefaultRuleDispatcher(null, opRules, procCtx);
-    GraphWalker ogw = new GenSparkWorkWalker(disp, procCtx);
+      Dispatcher disp = new DefaultRuleDispatcher(null, opRules, procCtx);
+      GraphWalker ogw = new GenSparkWorkWalker(disp, procCtx);
 
-    List<Node> topNodes = new ArrayList<Node>();
-    topNodes.addAll(pCtx.getTopOps().values());
-    ogw.startWalking(topNodes, null);
+      List<Node> topNodes = new ArrayList<Node>();
+      topNodes.addAll(pCtx.getTopOps().values());
+      ogw.startWalking(topNodes, null);
 
-    // -------------------------------- Second Pass ---------------------------------- //
-    // Process operator tree in two steps: first we process the extra op trees generated
-    // in the first pass. Then we process the main op tree, and the result task will depend
-    // on the task generated in the first pass.
-    topNodes.clear();
-    topNodes.addAll(procCtx.topOps.values());
-    generateTaskTreeHelper(procCtx, topNodes);
-
-    // If this set is not empty, it means we need to generate a separate task for collecting
-    // the partitions used.
-    if (!procCtx.clonedPruningTableScanSet.isEmpty()) {
-      SparkTask pruningTask = SparkUtilities.createSparkTask(conf);
-      SparkTask mainTask = procCtx.currentTask;
-      pruningTask.addDependentTask(procCtx.currentTask);
-      procCtx.rootTasks.remove(procCtx.currentTask);
-      procCtx.rootTasks.add(pruningTask);
-      procCtx.currentTask = pruningTask;
-
+      // ------------------ Second Pass ------------------//
+      // Process operator tree in two steps: first we process the extra op
+      // trees generated in the first pass. Then we process the main op tree,
+      // and the result task will depend on the task generated in the first pass.
       topNodes.clear();
-      topNodes.addAll(procCtx.clonedPruningTableScanSet);
+      topNodes.addAll(procCtx.topOps.values());
       generateTaskTreeHelper(procCtx, topNodes);
 
-      procCtx.currentTask = mainTask;
+      // If this set is not empty, it means we need to generate a separate task
+      // for collecting
+      // the partitions used.
+      if (!procCtx.clonedPruningTableScanSet.isEmpty()) {
+        SparkTask pruningTask = SparkUtilities.createSparkTask(conf);
+        SparkTask mainTask = procCtx.currentTask;
+        pruningTask.addDependentTask(procCtx.currentTask);
+        procCtx.rootTasks.remove(procCtx.currentTask);
+        procCtx.rootTasks.add(pruningTask);
+        procCtx.currentTask = pruningTask;
+
+        topNodes.clear();
+        topNodes.addAll(procCtx.clonedPruningTableScanSet);
+        generateTaskTreeHelper(procCtx, topNodes);
+
+        procCtx.currentTask = mainTask;
+      }
+
+      // -------------------------------- Post Pass
+      // ---------------------------------- //
+
+      // we need to clone some operator plans and remove union operators still
+      for (BaseWork w : procCtx.workWithUnionOperators) {
+        GenSparkUtils.getUtils().removeUnionOperators(procCtx, w);
+      }
+
+      // we need to fill MapWork with 'local' work and bucket information for
+      // SMB Join.
+      GenSparkUtils.getUtils().annotateMapWork(procCtx);
+
+      // finally make sure the file sink operators are set up right
+      for (FileSinkOperator fileSink : procCtx.fileSinkSet) {
+        GenSparkUtils.getUtils().processFileSink(procCtx, fileSink);
+      }
+
+      // Process partition pruning sinks
+      for (Operator<?> prunerSink : procCtx.pruningSinkSet) {
+        utils.processPartitionPruningSink(procCtx,
+            (SparkPartitionPruningSinkOperator) prunerSink);
+      }
     }
-
-    // -------------------------------- Post Pass ---------------------------------- //
-
-    // we need to clone some operator plans and remove union operators still
-    for (BaseWork w : procCtx.workWithUnionOperators) {
-      GenSparkUtils.getUtils().removeUnionOperators(procCtx, w);
-    }
-
-    // we need to fill MapWork with 'local' work and bucket information for SMB Join.
-    GenSparkUtils.getUtils().annotateMapWork(procCtx);
-
-    // finally make sure the file sink operators are set up right
-    for (FileSinkOperator fileSink : procCtx.fileSinkSet) {
-      GenSparkUtils.getUtils().processFileSink(procCtx, fileSink);
-    }
-
-    // Process partition pruning sinks
-    for (Operator<?> prunerSink : procCtx.pruningSinkSet) {
-      utils.processPartitionPruningSink(procCtx, (SparkPartitionPruningSinkOperator) prunerSink);
-    }
-
-    PERF_LOGGER.PerfLogEnd(CLASS_NAME, PerfLogger.SPARK_GENERATE_TASK_TREE);
   }
 
   private void generateTaskTreeHelper(GenSparkProcContext procCtx, List<Node> topNodes)
@@ -576,66 +590,69 @@ public class SparkCompiler extends TaskCompiler {
   @Override
   protected void optimizeTaskPlan(List<Task<?>> rootTasks, ParseContext pCtx,
       Context ctx) throws SemanticException {
-    PERF_LOGGER.PerfLogBegin(CLASS_NAME, PerfLogger.SPARK_OPTIMIZE_TASK_TREE);
-    PhysicalContext physicalCtx = new PhysicalContext(conf, pCtx, pCtx.getContext(), rootTasks,
-       pCtx.getFetchTask());
+    try (PerfTimer runJobTimer = SessionState.getPerfTimer(SparkCompiler.class,
+        PerfTimedAction.SPARK_OPTIMIZE_TASK_TREE)) {
 
-    physicalCtx = new SplitSparkWorkResolver().resolve(physicalCtx);
+      PhysicalContext physicalCtx = new PhysicalContext(conf, pCtx,
+          pCtx.getContext(), rootTasks, pCtx.getFetchTask());
 
-    if (conf.getBoolVar(HiveConf.ConfVars.HIVESKEWJOIN)) {
-      (new SparkSkewJoinResolver()).resolve(physicalCtx);
-    } else {
-      LOG.debug("Skipping runtime skew join optimization");
+      physicalCtx = new SplitSparkWorkResolver().resolve(physicalCtx);
+
+      if (conf.getBoolVar(HiveConf.ConfVars.HIVESKEWJOIN)) {
+        (new SparkSkewJoinResolver()).resolve(physicalCtx);
+      } else {
+        LOG.debug("Skipping runtime skew join optimization");
+      }
+
+      physicalCtx = new SparkMapJoinResolver().resolve(physicalCtx);
+
+      if (conf.isSparkDPPAny()) {
+        physicalCtx =
+            new SparkDynamicPartitionPruningResolver().resolve(physicalCtx);
+      }
+
+      if (conf.getBoolVar(HiveConf.ConfVars.HIVENULLSCANOPTIMIZE)) {
+        physicalCtx = new NullScanOptimizer().resolve(physicalCtx);
+      } else {
+        LOG.debug("Skipping null scan query optimization");
+      }
+
+      if (conf.getBoolVar(HiveConf.ConfVars.HIVEMETADATAONLYQUERIES)) {
+        physicalCtx = new MetadataOnlyOptimizer().resolve(physicalCtx);
+      } else {
+        LOG.debug("Skipping metadata only query optimization");
+      }
+
+      if (conf.getBoolVar(HiveConf.ConfVars.HIVE_CHECK_CROSS_PRODUCT)) {
+        physicalCtx = new SparkCrossProductCheck().resolve(physicalCtx);
+      } else {
+        LOG.debug("Skipping cross product analysis");
+      }
+
+      if (conf.getBoolVar(HiveConf.ConfVars.HIVE_VECTORIZATION_ENABLED)) {
+        (new Vectorizer()).resolve(physicalCtx);
+      } else {
+        LOG.debug("Skipping vectorization");
+      }
+
+      if (!"none".equalsIgnoreCase(
+          conf.getVar(HiveConf.ConfVars.HIVESTAGEIDREARRANGE))) {
+        (new StageIDsRearranger()).resolve(physicalCtx);
+      } else {
+        LOG.debug("Skipping stage id rearranger");
+      }
+
+      if (conf.getBoolVar(
+          HiveConf.ConfVars.HIVE_COMBINE_EQUIVALENT_WORK_OPTIMIZATION)) {
+        new CombineEquivalentWorkResolver().resolve(physicalCtx);
+      } else {
+        LOG.debug("Skipping combine equivalent work optimization");
+      }
+
+      if (physicalCtx.getContext().getExplainAnalyze() != null) {
+        new AnnotateRunTimeStatsOptimizer().resolve(physicalCtx);
+      }
     }
-
-    physicalCtx = new SparkMapJoinResolver().resolve(physicalCtx);
-
-    if (conf.isSparkDPPAny()) {
-      physicalCtx = new SparkDynamicPartitionPruningResolver().resolve(physicalCtx);
-    }
-
-    if (conf.getBoolVar(HiveConf.ConfVars.HIVENULLSCANOPTIMIZE)) {
-      physicalCtx = new NullScanOptimizer().resolve(physicalCtx);
-    } else {
-      LOG.debug("Skipping null scan query optimization");
-    }
-
-    if (conf.getBoolVar(HiveConf.ConfVars.HIVEMETADATAONLYQUERIES)) {
-      physicalCtx = new MetadataOnlyOptimizer().resolve(physicalCtx);
-    } else {
-      LOG.debug("Skipping metadata only query optimization");
-    }
-
-    if (conf.getBoolVar(HiveConf.ConfVars.HIVE_CHECK_CROSS_PRODUCT)) {
-      physicalCtx = new SparkCrossProductCheck().resolve(physicalCtx);
-    } else {
-      LOG.debug("Skipping cross product analysis");
-    }
-
-    if (conf.getBoolVar(HiveConf.ConfVars.HIVE_VECTORIZATION_ENABLED)) {
-      (new Vectorizer()).resolve(physicalCtx);
-    } else {
-      LOG.debug("Skipping vectorization");
-    }
-
-    if (!"none".equalsIgnoreCase(conf.getVar(HiveConf.ConfVars.HIVESTAGEIDREARRANGE))) {
-      (new StageIDsRearranger()).resolve(physicalCtx);
-    } else {
-      LOG.debug("Skipping stage id rearranger");
-    }
-
-    if (conf.getBoolVar(HiveConf.ConfVars.HIVE_COMBINE_EQUIVALENT_WORK_OPTIMIZATION)) {
-      new CombineEquivalentWorkResolver().resolve(physicalCtx);
-    } else {
-      LOG.debug("Skipping combine equivalent work optimization");
-    }
-
-    if (physicalCtx.getContext().getExplainAnalyze() != null) {
-      new AnnotateRunTimeStatsOptimizer().resolve(physicalCtx);
-    }
-
-    PERF_LOGGER.PerfLogEnd(CLASS_NAME, PerfLogger.SPARK_OPTIMIZE_TASK_TREE);
-    return;
   }
 
   private void updateBucketingVersionForUpgrade(OptimizeSparkProcContext procCtx) {

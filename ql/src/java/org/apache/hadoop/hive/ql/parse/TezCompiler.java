@@ -19,7 +19,6 @@ package org.apache.hadoop.hive.ql.parse;
 
 import com.google.common.collect.ListMultimap;
 import com.google.common.collect.Sets;
-import java.io.Serializable;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Comparator;
@@ -79,7 +78,8 @@ import org.apache.hadoop.hive.ql.lib.NodeProcessorCtx;
 import org.apache.hadoop.hive.ql.lib.PreOrderOnceWalker;
 import org.apache.hadoop.hive.ql.lib.Rule;
 import org.apache.hadoop.hive.ql.lib.RuleRegExp;
-import org.apache.hadoop.hive.ql.log.PerfLogger;
+import org.apache.hadoop.hive.ql.log.PerfTimedAction;
+import org.apache.hadoop.hive.ql.log.PerfTimer;
 import org.apache.hadoop.hive.ql.metadata.Hive;
 import org.apache.hadoop.hive.ql.optimizer.ConstantPropagate;
 import org.apache.hadoop.hive.ql.optimizer.ConstantPropagateProcCtx.ConstantPropagateOption;
@@ -163,68 +163,81 @@ public class TezCompiler extends TaskCompiler {
   @Override
   protected void optimizeOperatorPlan(ParseContext pCtx, Set<ReadEntity> inputs,
       Set<WriteEntity> outputs) throws SemanticException {
-    PerfLogger perfLogger = SessionState.getPerfLogger();
     // Create the context for the walker
     OptimizeTezProcContext procCtx = new OptimizeTezProcContext(conf, pCtx, inputs, outputs);
 
-    perfLogger.PerfLogBegin(this.getClass().getName(), PerfLogger.TEZ_COMPILER);
-    runTopNKeyOptimization(procCtx);
-    perfLogger.PerfLogEnd(this.getClass().getName(), PerfLogger.TEZ_COMPILER, "Run top n key optimization");
+    try (PerfTimer compileTimer = SessionState.getPerfTimer(TezCompiler.class,
+        PerfTimedAction.TEZ_COMPILER, "Run top n key optimization")) {
+      runTopNKeyOptimization(procCtx);
+    }
 
-    perfLogger.PerfLogBegin(this.getClass().getName(), PerfLogger.TEZ_COMPILER);
-    // setup dynamic partition pruning where possible
-    runDynamicPartitionPruning(procCtx, inputs, outputs);
-    perfLogger.PerfLogEnd(this.getClass().getName(), PerfLogger.TEZ_COMPILER, "Setup dynamic partition pruning");
+    try (PerfTimer compileTimer = SessionState.getPerfTimer(TezCompiler.class,
+        PerfTimedAction.TEZ_COMPILER, "Setup dynamic partition pruning")) {
+      // setup dynamic partition pruning where possible
+      runDynamicPartitionPruning(procCtx, inputs, outputs);
+    }
 
     // need to run this; to get consistent filterop conditions(for operator tree matching)
     if (procCtx.conf.getBoolVar(ConfVars.HIVEOPTCONSTANTPROPAGATION)) {
       new ConstantPropagate(ConstantPropagateOption.SHORTCUT).transform(procCtx.parseContext);
     }
 
-    perfLogger.PerfLogBegin(this.getClass().getName(), PerfLogger.TEZ_COMPILER);
-    // setup stats in the operator plan
-    runStatsAnnotation(procCtx);
-    perfLogger.PerfLogEnd(this.getClass().getName(), PerfLogger.TEZ_COMPILER, "Setup stats in the operator plan");
+    try (PerfTimer compileTimer = SessionState.getPerfTimer(TezCompiler.class,
+        PerfTimedAction.TEZ_COMPILER, "Setup stats in the operator plan")) {
+      // setup stats in the operator plan
+      runStatsAnnotation(procCtx);
+    }
 
     // run Sorted dynamic partition optimization
     if(HiveConf.getBoolVar(procCtx.conf, HiveConf.ConfVars.DYNAMICPARTITIONING) &&
         HiveConf.getVar(procCtx.conf, HiveConf.ConfVars.DYNAMICPARTITIONINGMODE).equals("nonstrict") &&
         !HiveConf.getBoolVar(procCtx.conf, HiveConf.ConfVars.HIVEOPTLISTBUCKETING)) {
-      perfLogger.PerfLogBegin(this.getClass().getName(), PerfLogger.TEZ_COMPILER);
-      new SortedDynPartitionOptimizer().transform(procCtx.parseContext);
-      perfLogger.PerfLogEnd(this.getClass().getName(), PerfLogger.TEZ_COMPILER, "Sorted dynamic partition optimization");
+      try (PerfTimer compileTimer = SessionState.getPerfTimer(TezCompiler.class,
+          PerfTimedAction.TEZ_COMPILER,
+          "Sorted dynamic partition optimization")) {
+        new SortedDynPartitionOptimizer().transform(procCtx.parseContext);
+      }
     }
 
-    if(HiveConf.getBoolVar(procCtx.conf, HiveConf.ConfVars.HIVEOPTREDUCEDEDUPLICATION)
+    if (HiveConf.getBoolVar(procCtx.conf,
+        HiveConf.ConfVars.HIVEOPTREDUCEDEDUPLICATION)
         || procCtx.parseContext.hasAcidWrite()) {
-      perfLogger.PerfLogBegin(this.getClass().getName(), PerfLogger.TEZ_COMPILER);
-      // Dynamic sort partition adds an extra RS therefore need to de-dup
-      new ReduceSinkDeDuplication().transform(procCtx.parseContext);
-      // there is an issue with dedup logic wherein SELECT is created with wrong columns
-      // NonBlockingOpDeDupProc fixes that
-      // (kind of hackish, the issue in de-dup should be fixed but it needs more investigation)
-      new NonBlockingOpDeDupProc().transform(procCtx.parseContext);
-      perfLogger.PerfLogEnd(this.getClass().getName(), PerfLogger.TEZ_COMPILER, "Reduce Sink de-duplication");
+      try (PerfTimer compileTimer = SessionState.getPerfTimer(TezCompiler.class,
+          PerfTimedAction.TEZ_COMPILER,
+          "Reduce Sink de-duplication")) {
+        // Dynamic sort partition adds an extra RS therefore need to de-dup
+        new ReduceSinkDeDuplication().transform(procCtx.parseContext);
+        // there is an issue with dedup logic wherein SELECT is created with
+        // wrong columns NonBlockingOpDeDupProc fixes that (kind of hackish, the
+        // issue in de-dup should be fixed but it needs more investigation)
+        new NonBlockingOpDeDupProc().transform(procCtx.parseContext);
+      }
     }
 
-    perfLogger.PerfLogBegin(this.getClass().getName(), PerfLogger.TEZ_COMPILER);
-    // run the optimizations that use stats for optimization
-    runStatsDependentOptimizations(procCtx, inputs, outputs);
-    perfLogger.PerfLogEnd(this.getClass().getName(), PerfLogger.TEZ_COMPILER, "Run the optimizations that use stats for optimization");
-
-    perfLogger.PerfLogBegin(this.getClass().getName(), PerfLogger.TEZ_COMPILER);
-    if(procCtx.conf.getBoolVar(ConfVars.HIVEOPTJOINREDUCEDEDUPLICATION)) {
-      new ReduceSinkJoinDeDuplication().transform(procCtx.parseContext);
+    try (PerfTimer compileTimer = SessionState.getPerfTimer(TezCompiler.class,
+        PerfTimedAction.TEZ_COMPILER,
+        "Run the optimizations that use stats for optimization")) {
+      // run the optimizations that use stats for optimization
+      runStatsDependentOptimizations(procCtx, inputs, outputs);
     }
-    perfLogger.PerfLogEnd(this.getClass().getName(), PerfLogger.TEZ_COMPILER, "Run reduce sink after join algorithm selection");
+
+    try (PerfTimer compileTimer = SessionState.getPerfTimer(TezCompiler.class,
+        PerfTimedAction.TEZ_COMPILER,
+        "Run reduce sink after join algorithm selection")) {
+      if (procCtx.conf.getBoolVar(ConfVars.HIVEOPTJOINREDUCEDEDUPLICATION)) {
+        new ReduceSinkJoinDeDuplication().transform(procCtx.parseContext);
+      }
+    }
 
     semijoinRemovalBasedTransformations(procCtx, inputs, outputs);
 
-    perfLogger.PerfLogBegin(this.getClass().getName(), PerfLogger.TEZ_COMPILER);
-    if(procCtx.conf.getBoolVar(ConfVars.HIVE_SHARED_WORK_OPTIMIZATION)) {
-      new SharedWorkOptimizer().transform(procCtx.parseContext);
+    try (PerfTimer compileTimer = SessionState.getPerfTimer(TezCompiler.class,
+        PerfTimedAction.TEZ_COMPILER, "Shared scans optimization")) {
+      if (procCtx.conf.getBoolVar(ConfVars.HIVE_SHARED_WORK_OPTIMIZATION)) {
+        new SharedWorkOptimizer().transform(procCtx.parseContext);
+      }
     }
-    perfLogger.PerfLogEnd(this.getClass().getName(), PerfLogger.TEZ_COMPILER, "Shared scans optimization");
+
 
     // need a new run of the constant folding because we might have created lots
     // of "and true and true" conditions.
@@ -234,10 +247,12 @@ public class TezCompiler extends TaskCompiler {
       new ConstantPropagate(ConstantPropagateOption.SHORTCUT).transform(procCtx.parseContext);
     }
 
-    perfLogger.PerfLogBegin(this.getClass().getName(), PerfLogger.TEZ_COMPILER);
-    AuxOpTreeSignature.linkAuxSignatures(procCtx.parseContext);
-    markOperatorsWithUnstableRuntimeStats(procCtx);
-    perfLogger.PerfLogEnd(this.getClass().getName(), PerfLogger.TEZ_COMPILER, "markOperatorsWithUnstableRuntimeStats");
+    try (PerfTimer compileTimer = SessionState.getPerfTimer(TezCompiler.class,
+        PerfTimedAction.TEZ_COMPILER,
+        "markOperatorsWithUnstableRuntimeStats")) {
+      AuxOpTreeSignature.linkAuxSignatures(procCtx.parseContext);
+      markOperatorsWithUnstableRuntimeStats(procCtx);
+    }
 
     // ATTENTION : DO NOT, I REPEAT, DO NOT WRITE ANYTHING AFTER updateBucketingVersionForUpgrade()
     // ANYTHING WHICH NEEDS TO BE ADDED MUST BE ADDED ABOVE
@@ -483,7 +498,6 @@ public class TezCompiler extends TaskCompiler {
 
   private void semijoinRemovalBasedTransformations(OptimizeTezProcContext procCtx,
                                                    Set<ReadEntity> inputs, Set<WriteEntity> outputs) throws SemanticException {
-    PerfLogger perfLogger = SessionState.getPerfLogger();
 
     final boolean dynamicPartitionPruningEnabled =
         procCtx.conf.getBoolVar(ConfVars.TEZ_DYNAMIC_PARTITION_PRUNING);
@@ -493,58 +507,72 @@ public class TezCompiler extends TaskCompiler {
     final boolean extendedReductionEnabled = dynamicPartitionPruningEnabled &&
         procCtx.conf.getBoolVar(ConfVars.TEZ_DYNAMIC_PARTITION_PRUNING_EXTENDED);
 
-    perfLogger.PerfLogBegin(this.getClass().getName(), PerfLogger.TEZ_COMPILER);
-    if (dynamicPartitionPruningEnabled) {
-      runRemoveDynamicPruningOptimization(procCtx, inputs, outputs);
+    try (PerfTimer compileTimer = SessionState.getPerfTimer(TezCompiler.class,
+        PerfTimedAction.TEZ_COMPILER, "Run remove dynamic pruning by size")) {
+      if (dynamicPartitionPruningEnabled) {
+        runRemoveDynamicPruningOptimization(procCtx, inputs, outputs);
+      }
     }
-    perfLogger.PerfLogEnd(this.getClass().getName(), PerfLogger.TEZ_COMPILER, "Run remove dynamic pruning by size");
 
     if (semiJoinReductionEnabled) {
-      perfLogger.PerfLogBegin(this.getClass().getName(), PerfLogger.TEZ_COMPILER);
-      markSemiJoinForDPP(procCtx);
-      perfLogger.PerfLogEnd(this.getClass().getName(), PerfLogger.TEZ_COMPILER, "Mark certain semijoin edges important based ");
+      try (PerfTimer compileTimer = SessionState.getPerfTimer(TezCompiler.class,
+          PerfTimedAction.TEZ_COMPILER,
+          "Mark certain semijoin edges important based")) {
+        markSemiJoinForDPP(procCtx);
+      }
 
-      // Remove any semi join edges from Union Op
-      perfLogger.PerfLogBegin(this.getClass().getName(), PerfLogger.TEZ_COMPILER);
-      removeSemiJoinEdgesForUnion(procCtx);
-      perfLogger.PerfLogEnd(this.getClass().getName(), PerfLogger.TEZ_COMPILER,
-                            "Remove any semi join edge between Union and RS");
+      try (PerfTimer compileTimer = SessionState.getPerfTimer(TezCompiler.class,
+          PerfTimedAction.TEZ_COMPILER,
+          "Remove any semi join edge between Union and RS")) {
+        // Remove any semi join edges from Union Op
+        removeSemiJoinEdgesForUnion(procCtx);
+      }
 
-      // Remove any parallel edge between semijoin and mapjoin.
-      perfLogger.PerfLogBegin(this.getClass().getName(), PerfLogger.TEZ_COMPILER);
-      removeSemijoinsParallelToMapJoin(procCtx);
-      perfLogger.PerfLogEnd(this.getClass().getName(), PerfLogger.TEZ_COMPILER, "Remove any parallel edge between semijoin and mapjoin");
+      try (PerfTimer compileTimer = SessionState.getPerfTimer(TezCompiler.class,
+          PerfTimedAction.TEZ_COMPILER,
+          "Remove any parallel edge between semijoin and mapjoin")) {
+        removeSemijoinsParallelToMapJoin(procCtx);
+      }
 
-      // Remove semijoin optimization if SMB join is created.
-      perfLogger.PerfLogBegin(this.getClass().getName(), PerfLogger.TEZ_COMPILER);
-      removeSemijoinOptimizationFromSMBJoins(procCtx);
-      perfLogger.PerfLogEnd(this.getClass().getName(), PerfLogger.TEZ_COMPILER, "Remove semijoin optimizations if needed");
+      try (PerfTimer compileTimer = SessionState.getPerfTimer(TezCompiler.class,
+          PerfTimedAction.TEZ_COMPILER,
+          "Remove semijoin optimizations if needed")) {
+        // Remove semijoin optimization if SMB join is created.
+        removeSemijoinOptimizationFromSMBJoins(procCtx);
+      }
 
-      // Remove bloomfilter if no stats generated
-      perfLogger.PerfLogBegin(this.getClass().getName(), PerfLogger.TEZ_COMPILER);
-      removeSemiJoinIfNoStats(procCtx);
-      perfLogger.PerfLogEnd(this.getClass().getName(), PerfLogger.TEZ_COMPILER, "Remove bloom filter optimizations if needed");
+      try (PerfTimer compileTimer = SessionState.getPerfTimer(TezCompiler.class,
+          PerfTimedAction.TEZ_COMPILER,
+          "Remove bloom filter optimizations if needed")) {
+        // Remove bloomfilter if no stats generated
+        removeSemiJoinIfNoStats(procCtx);
+      }
 
-      // Removing semijoin optimization when it may not be beneficial
-      perfLogger.PerfLogBegin(this.getClass().getName(), PerfLogger.TEZ_COMPILER);
-      removeSemijoinOptimizationByBenefit(procCtx);
-      perfLogger.PerfLogEnd(this.getClass().getName(), PerfLogger.TEZ_COMPILER, "Remove Semijoins based on cost benefits");
+      try (PerfTimer compileTimer = SessionState.getPerfTimer(TezCompiler.class,
+          PerfTimedAction.TEZ_COMPILER,
+          "Remove Semijoins based on cost benefits")) {
+        // Removing semijoin optimization when it may not be beneficial
+        removeSemijoinOptimizationByBenefit(procCtx);
+      }
     }
 
-    // after the stats phase we might have some cyclic dependencies that we need
-    // to take care of.
-    perfLogger.PerfLogBegin(this.getClass().getName(), PerfLogger.TEZ_COMPILER);
-    if (dynamicPartitionPruningEnabled) {
-      runCycleAnalysisForPartitionPruning(procCtx, inputs, outputs);
+    try (PerfTimer compileTimer = SessionState.getPerfTimer(TezCompiler.class,
+        PerfTimedAction.TEZ_COMPILER,
+        "Run cycle analysis for partition pruning")) {
+      // after the stats phase we might have some cyclic dependencies that we
+      // need to take care of.
+      if (dynamicPartitionPruningEnabled) {
+        runCycleAnalysisForPartitionPruning(procCtx, inputs, outputs);
+      }
     }
-    perfLogger.PerfLogEnd(this.getClass().getName(), PerfLogger.TEZ_COMPILER, "Run cycle analysis for partition pruning");
 
-    // remove redundant dpp and semijoins
-    perfLogger.PerfLogBegin(this.getClass().getName(), PerfLogger.TEZ_COMPILER);
-    if (extendedReductionEnabled) {
-      removeRedundantSemijoinAndDpp(procCtx);
+    try (PerfTimer compileTimer = SessionState.getPerfTimer(TezCompiler.class,
+        PerfTimedAction.TEZ_COMPILER, "Remove redundant semijoin reduction")) {
+      // remove redundant dpp and semijoins
+      if (extendedReductionEnabled) {
+        removeRedundantSemijoinAndDpp(procCtx);
+      }
     }
-    perfLogger.PerfLogEnd(this.getClass().getName(), PerfLogger.TEZ_COMPILER, "Remove redundant semijoin reduction");
   }
 
   private void runRemoveDynamicPruningOptimization(OptimizeTezProcContext procCtx,
@@ -598,11 +626,18 @@ public class TezCompiler extends TaskCompiler {
 
   @Override
   protected void generateTaskTree(List<Task<?>> rootTasks, ParseContext pCtx,
+      List<Task<MoveWork>> mvTask, Set<ReadEntity> inputs,
+      Set<WriteEntity> outputs) throws SemanticException {
+    try (PerfTimer compileTimer = SessionState.getPerfTimer(TezCompiler.class,
+        PerfTimedAction.TEZ_COMPILER, "generateTaskTree")) {
+      doGenerateTaskTree(rootTasks, pCtx, mvTask, inputs, outputs);
+    }
+  }
+
+  private void doGenerateTaskTree(List<Task<?>> rootTasks, ParseContext pCtx,
       List<Task<MoveWork>> mvTask, Set<ReadEntity> inputs, Set<WriteEntity> outputs)
       throws SemanticException {
 
-	PerfLogger perfLogger = SessionState.getPerfLogger();
-    perfLogger.PerfLogBegin(this.getClass().getName(), PerfLogger.TEZ_COMPILER);
     ParseContext tempParseContext = getParseContext(pCtx, rootTasks);
     GenTezUtils utils = new GenTezUtils();
     GenTezWork genTezWork = new GenTezWork(utils);
@@ -686,7 +721,6 @@ public class TezCompiler extends TaskCompiler {
       LOG.debug("Handling AppMasterEventOperator: " + event);
       GenTezUtils.processAppMasterEvent(procCtx, event);
     }
-    perfLogger.PerfLogEnd(this.getClass().getName(), PerfLogger.TEZ_COMPILER, "generateTaskTree");
   }
 
   @Override
@@ -743,12 +777,17 @@ public class TezCompiler extends TaskCompiler {
     // currently all Tez work is on the cluster
     return;
   }
-
   @Override
   protected void optimizeTaskPlan(List<Task<?>> rootTasks, ParseContext pCtx,
       Context ctx) throws SemanticException {
-    PerfLogger perfLogger = SessionState.getPerfLogger();
-    perfLogger.PerfLogBegin(this.getClass().getName(), PerfLogger.TEZ_COMPILER);
+    try (PerfTimer compileTimer = SessionState.getPerfTimer(TezCompiler.class,
+        PerfTimedAction.TEZ_COMPILER, "optimizeTaskPlan")) {
+      doOptimizeTaskPlan(rootTasks, pCtx, ctx);
+    }
+  }
+
+  private void doOptimizeTaskPlan(List<Task<?>> rootTasks, ParseContext pCtx,
+      Context ctx) throws SemanticException {
     PhysicalContext physicalCtx = new PhysicalContext(conf, pCtx, pCtx.getContext(), rootTasks,
        pCtx.getFetchTask());
 
@@ -809,9 +848,6 @@ public class TezCompiler extends TaskCompiler {
     if (physicalCtx.getContext().getExplainAnalyze() != null) {
       new AnnotateRunTimeStatsOptimizer().resolve(physicalCtx);
     }
-
-    perfLogger.PerfLogEnd(this.getClass().getName(), PerfLogger.TEZ_COMPILER, "optimizeTaskPlan");
-    return;
   }
 
   private static class SMBJoinOpProcContext implements NodeProcessorCtx {

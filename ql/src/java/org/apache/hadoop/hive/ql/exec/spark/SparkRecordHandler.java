@@ -29,8 +29,6 @@ import java.util.concurrent.TimeUnit;
 
 import org.apache.hadoop.hive.ql.exec.MapredContext;
 import org.apache.hadoop.hive.ql.exec.Utilities;
-import org.apache.hadoop.hive.ql.log.PerfLogger;
-import org.apache.hadoop.hive.ql.session.SessionState;
 import org.apache.hadoop.mapred.JobConf;
 import org.apache.hadoop.mapred.OutputCollector;
 import org.apache.hadoop.mapred.Reporter;
@@ -41,8 +39,6 @@ import com.google.common.util.concurrent.ThreadFactoryBuilder;
 
 
 public abstract class SparkRecordHandler {
-  protected static final String CLASS_NAME = SparkRecordHandler.class.getName();
-  protected final PerfLogger perfLogger = SessionState.getPerfLogger();
   private static final Logger LOG = LoggerFactory.getLogger(SparkRecordHandler.class);
 
   // used to log memory usage periodically

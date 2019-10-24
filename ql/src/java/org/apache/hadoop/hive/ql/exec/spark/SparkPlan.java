@@ -31,7 +31,6 @@ import java.util.Set;
 import org.apache.commons.lang.StringUtils;
 import org.apache.hadoop.hive.conf.HiveConf;
 import org.apache.hadoop.hive.ql.exec.ExplainTask;
-import org.apache.hadoop.hive.ql.exec.Utilities;
 import org.apache.hadoop.hive.ql.parse.ExplainConfiguration;
 import org.apache.hadoop.hive.ql.plan.ExplainWork;
 import org.apache.hadoop.mapred.JobConf;
@@ -40,7 +39,8 @@ import org.apache.spark.util.CallSite;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.apache.hadoop.hive.ql.io.HiveKey;
-import org.apache.hadoop.hive.ql.log.PerfLogger;
+import org.apache.hadoop.hive.ql.log.PerfTimedAction;
+import org.apache.hadoop.hive.ql.log.PerfTimer;
 import org.apache.hadoop.hive.ql.session.SessionState;
 import org.apache.hadoop.io.BytesWritable;
 import org.apache.spark.api.java.JavaPairRDD;
@@ -49,9 +49,7 @@ import com.google.common.base.Preconditions;
 
 @SuppressWarnings("rawtypes")
 public class SparkPlan {
-  private static final String CLASS_NAME = SparkPlan.class.getName();
   private static final Logger LOG = LoggerFactory.getLogger(SparkPlan.class);
-  private final PerfLogger perfLogger = SessionState.getPerfLogger();
 
   private final Set<SparkTran> rootTrans = new HashSet<SparkTran>();
   private final Set<SparkTran> leafTrans = new HashSet<SparkTran>();
@@ -67,9 +65,15 @@ public class SparkPlan {
     this.sc = sc;
   }
 
-  @SuppressWarnings("unchecked")
   public JavaPairRDD<HiveKey, BytesWritable> generateGraph() {
-    perfLogger.PerfLogBegin(CLASS_NAME, PerfLogger.SPARK_BUILD_RDD_GRAPH);
+    try (PerfTimer compileTimer = SessionState.getPerfTimer(
+        SparkPlan.class, PerfTimedAction.SPARK_BUILD_RDD_GRAPH)) {
+      return doGenerateGraph();
+    }
+  }
+
+  @SuppressWarnings("unchecked")
+  protected JavaPairRDD<HiveKey, BytesWritable> doGenerateGraph() {
     Map<SparkTran, JavaPairRDD<HiveKey, BytesWritable>> tranToOutputRDDMap
         = new HashMap<SparkTran, JavaPairRDD<HiveKey, BytesWritable>>();
     for (SparkTran tran : getAllTrans()) {
@@ -113,8 +117,6 @@ public class SparkPlan {
       }
     }
 
-    perfLogger.PerfLogEnd(CLASS_NAME, PerfLogger.SPARK_BUILD_RDD_GRAPH);
-
     LOG.info("\n\nSpark RDD Graph:\n\n" + finalRDD.toDebugString() + "\n");
 
     return finalRDD;
@@ -134,7 +136,6 @@ public class SparkPlan {
   private String getLongFormCallSite(SparkTran tran) {
     if (this.jobConf.getBoolean(HiveConf.ConfVars.HIVE_SPARK_LOG_EXPLAIN_WEBUI.varname, HiveConf
             .ConfVars.HIVE_SPARK_LOG_EXPLAIN_WEBUI.defaultBoolVal)) {
-      perfLogger.PerfLogBegin(CLASS_NAME, PerfLogger.SPARK_CREATE_EXPLAIN_PLAN + tran.getName());
 
       ExplainWork explainWork = new ExplainWork();
       explainWork.setConfig(new ExplainConfiguration());
@@ -142,7 +143,8 @@ public class SparkPlan {
       explainTask.setWork(explainWork);
 
       String explainOutput = "";
-      try {
+      try (PerfTimer compileTimer = SessionState.getPerfTimer(SparkPlan.class,
+          PerfTimedAction.SPARK_CREATE_EXPLAIN_PLAN)) {
         ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
         explainTask.outputPlan(tran.getBaseWork(), new PrintStream(outputStream), false, false, 0,
                 null, this.jobConf.getBoolean(HiveConf.ConfVars.HIVE_IN_TEST.varname,
@@ -154,7 +156,6 @@ public class SparkPlan {
         LOG.error("Error while generating explain plan for " + tran.getName(), e);
       }
 
-      perfLogger.PerfLogEnd(CLASS_NAME, PerfLogger.SPARK_CREATE_EXPLAIN_PLAN + tran.getName());
       return explainOutput;
     }
     return "";

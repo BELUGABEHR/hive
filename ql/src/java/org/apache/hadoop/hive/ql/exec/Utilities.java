@@ -32,7 +32,6 @@ import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
-import java.io.Serializable;
 import java.net.URI;
 import java.net.URL;
 import java.net.URLClassLoader;
@@ -110,6 +109,7 @@ import org.apache.hadoop.hive.metastore.api.Order;
 import org.apache.hadoop.hive.metastore.api.hive_metastoreConstants;
 import org.apache.hadoop.hive.metastore.utils.MetaStoreUtils;
 import org.apache.hadoop.hive.ql.Context;
+import org.apache.hadoop.hive.ql.Driver;
 import org.apache.hadoop.hive.ql.ErrorMsg;
 import org.apache.hadoop.hive.ql.DriverState;
 import org.apache.hadoop.hive.ql.QueryPlan;
@@ -141,7 +141,8 @@ import org.apache.hadoop.hive.ql.io.merge.MergeFileMapper;
 import org.apache.hadoop.hive.ql.io.merge.MergeFileWork;
 import org.apache.hadoop.hive.ql.io.rcfile.truncate.ColumnTruncateMapper;
 import org.apache.hadoop.hive.ql.io.rcfile.truncate.ColumnTruncateWork;
-import org.apache.hadoop.hive.ql.log.PerfLogger;
+import org.apache.hadoop.hive.ql.log.PerfTimer;
+import org.apache.hadoop.hive.ql.log.PerfTimedAction;
 import org.apache.hadoop.hive.ql.metadata.HiveException;
 import org.apache.hadoop.hive.ql.metadata.HiveStorageHandler;
 import org.apache.hadoop.hive.ql.metadata.HiveUtils;
@@ -301,8 +302,7 @@ public final class Utilities {
 
   private static GlobalWorkMapFactory gWorkMap = new GlobalWorkMapFactory();
 
-  private static final String CLASS_NAME = Utilities.class.getName();
-  private static final Logger LOG = LoggerFactory.getLogger(CLASS_NAME);
+  private static final Logger LOG = LoggerFactory.getLogger(Utilities.class);
 
   public static void clearWork(Configuration conf) {
     Path mapPath = getPlanPath(conf, MAP_PLAN_NAME);
@@ -1435,7 +1435,6 @@ public final class Utilities {
     FileSystem fs = specPath.getFileSystem(hconf);
     Path tmpPath = Utilities.toTempPath(specPath);
     Path taskTmpPath = Utilities.toTaskTempPath(specPath);
-    PerfLogger perfLogger = SessionState.getPerfLogger();
     boolean isBlobStorage = BlobStorageUtils.isBlobStorageFileSystem(hconf, fs);
     boolean avoidRename = false;
     boolean shouldAvoidRename = shouldAvoidRename(conf, hconf);
@@ -1452,32 +1451,36 @@ public final class Utilities {
         Path tmpPathOriginal = tmpPath;
         tmpPath = new Path(tmpPath.getParent(), tmpPath.getName() + ".moved");
         LOG.debug("shouldAvoidRename is false therefore moving/renaming " + tmpPathOriginal + " to " + tmpPath);
-        perfLogger.PerfLogBegin("FileSinkOperator", "rename");
-        Utilities.rename(fs, tmpPathOriginal, tmpPath);
-        perfLogger.PerfLogEnd("FileSinkOperator", "rename");
+        try (PerfTimer compileTimer = SessionState.getPerfTimer(
+            FileSinkOperator.class, PerfTimedAction.RENAME_FILE)) {
+          Utilities.rename(fs, tmpPathOriginal, tmpPath);
+        }
       }
 
       // Remove duplicates from tmpPath
       List<FileStatus> statusList = HiveStatsUtils.getFileStatusRecurse(
           tmpPath, ((dpCtx == null) ? 1 : dpCtx.getNumDPCols()), fs);
       FileStatus[] statuses = statusList.toArray(new FileStatus[statusList.size()]);
-      if(statuses != null && statuses.length > 0) {
-        Set<FileStatus> filesKept = new HashSet<>();
-        perfLogger.PerfLogBegin("FileSinkOperator", "RemoveTempOrDuplicateFiles");
-        // remove any tmp file or double-committed output files
-        List<Path> emptyBuckets = Utilities.removeTempOrDuplicateFiles(
-            fs, statuses, dpCtx, conf, hconf, filesKept, false);
-        perfLogger.PerfLogEnd("FileSinkOperator", "RemoveTempOrDuplicateFiles");
+      if (statuses != null && statuses.length > 0) {
+        final Set<FileStatus> filesKept = new HashSet<>();
+        final List<Path> emptyBuckets;
+        try (PerfTimer compileTimer = SessionState.getPerfTimer(
+            FileSinkOperator.class, PerfTimedAction.REMOVE_TMP_DUP_FILES)) {
+          // remove any tmp file or double-committed output files
+          emptyBuckets = Utilities.removeTempOrDuplicateFiles(
+             fs, statuses, dpCtx, conf, hconf, filesKept, false);
+        }
         // create empty buckets if necessary
         if (!emptyBuckets.isEmpty()) {
-          perfLogger.PerfLogBegin("FileSinkOperator", "CreateEmptyBuckets");
-          createEmptyBuckets(
-              hconf, emptyBuckets, conf.getCompressed(), conf.getTableInfo(), reporter);
-          for(Path p:emptyBuckets) {
-            FileStatus[] items = fs.listStatus(p);
-            filesKept.addAll(Arrays.asList(items));
+          try (PerfTimer compileTimer = SessionState.getPerfTimer(
+              FileSinkOperator.class, PerfTimedAction.CREATE_EMPTY_BUCKETS)) {
+            createEmptyBuckets(hconf, emptyBuckets, conf.getCompressed(),
+                conf.getTableInfo(), reporter);
+            for (Path p : emptyBuckets) {
+              FileStatus[] items = fs.listStatus(p);
+              filesKept.addAll(Arrays.asList(items));
+            }
           }
-          perfLogger.PerfLogEnd("FileSinkOperator", "CreateEmptyBuckets");
         }
 
         // move to the file destination
@@ -1488,16 +1491,19 @@ public final class Utilities {
           conf.getFilesToFetch().addAll(filesKept);
         } else if (conf !=null && conf.isCTASorCM() && isBlobStorage) {
           // for CTAS or Create MV statements
-          perfLogger.PerfLogBegin("FileSinkOperator", "moveSpecifiedFileStatus");
-          LOG.debug("CTAS/Create MV: Files being renamed:  " + filesKept.toString());
-          Utilities.moveSpecifiedFileStatus(fs, tmpPath, specPath, filesKept);
-          perfLogger.PerfLogEnd("FileSinkOperator", "moveSpecifiedFileStatus");
+          try (PerfTimer compileTimer = SessionState.getPerfTimer(
+              FileSinkOperator.class, PerfTimedAction.MOVE_FILE_STATUS)) {
+            LOG.debug("CTAS/Create MV: Files being renamed: {}", filesKept);
+            Utilities.moveSpecifiedFileStatus(fs, tmpPath, specPath, filesKept);
+          }
         } else {
           // for rest of the statement e.g. INSERT, LOAD etc
-          perfLogger.PerfLogBegin("FileSinkOperator", "RenameOrMoveFiles");
-          LOG.debug("Final renaming/moving. Source: " + tmpPath + " .Destination: " + specPath);
-          Utilities.renameOrMoveFiles(fs, tmpPath, specPath);
-          perfLogger.PerfLogEnd("FileSinkOperator", "RenameOrMoveFiles");
+          try (PerfTimer compileTimer = SessionState.getPerfTimer(
+              FileSinkOperator.class, PerfTimedAction.RENAME_MOVE_FILES)) {
+            LOG.debug("Final renaming/moving. Source: [{}] Destination: [{}]",
+                tmpPath, specPath);
+            Utilities.renameOrMoveFiles(fs, tmpPath, specPath);
+          }
         }
       }
     } else {
@@ -2344,53 +2350,56 @@ public final class Utilities {
    */
   public static ContentSummary getInputSummary(final Context ctx, MapWork work, PathFilter filter)
       throws IOException {
-    PerfLogger perfLogger = SessionState.getPerfLogger();
-    perfLogger.PerfLogBegin(CLASS_NAME, PerfLogger.INPUT_SUMMARY);
 
     final long[] summary = {0L, 0L, 0L};
     final Set<Path> pathNeedProcess = new HashSet<>();
 
-    // Since multiple threads could call this method concurrently, locking
-    // this method will avoid number of threads out of control.
-    synchronized (INPUT_SUMMARY_LOCK) {
-      // For each input path, calculate the total size.
-      for (final Path path : work.getPathToAliases().keySet()) {
-        if (path == null) {
-          continue;
-        }
-        if (filter != null && !filter.accept(path)) {
-          continue;
+    try (PerfTimer compileTimer = SessionState
+        .getPerfTimer(FileSinkOperator.class, PerfTimedAction.INPUT_SUMMARY)) {
+
+      // Since multiple threads could call this method concurrently, locking
+      // this method will avoid number of threads out of control.
+      synchronized (INPUT_SUMMARY_LOCK) {
+        // For each input path, calculate the total size.
+        for (final Path path : work.getPathToAliases().keySet()) {
+          if (path == null) {
+            continue;
+          }
+          if (filter != null && !filter.accept(path)) {
+            continue;
+          }
+
+          ContentSummary cs = ctx.getCS(path);
+          if (cs != null) {
+            summary[0] += cs.getLength();
+            summary[1] += cs.getFileCount();
+            summary[2] += cs.getDirectoryCount();
+          } else {
+            pathNeedProcess.add(path);
+          }
         }
 
-        ContentSummary cs = ctx.getCS(path);
-        if (cs != null) {
-          summary[0] += cs.getLength();
-          summary[1] += cs.getFileCount();
-          summary[2] += cs.getDirectoryCount();
+        // Process the case when name node call is needed
+        final ExecutorService executor;
+
+        int numExecutors = getMaxExecutorsForInputListing(ctx.getConf(),
+            pathNeedProcess.size());
+        if (numExecutors > 1) {
+          LOG.info("Using {} threads for getContentSummary", numExecutors);
+          executor = Executors.newFixedThreadPool(numExecutors,
+              new ThreadFactoryBuilder().setDaemon(true)
+                  .setNameFormat("Get-Input-Summary-%d").build());
         } else {
-          pathNeedProcess.add(path);
+          LOG.info("Not using thread pool for getContentSummary");
+          executor = MoreExecutors.newDirectExecutorService();
         }
+        getInputSummaryWithPool(ctx,
+            Collections.unmodifiableSet(pathNeedProcess), work, summary,
+            executor);
       }
-
-      // Process the case when name node call is needed
-      final ExecutorService executor;
-
-      int numExecutors = getMaxExecutorsForInputListing(ctx.getConf(), pathNeedProcess.size());
-      if (numExecutors > 1) {
-        LOG.info("Using {} threads for getContentSummary", numExecutors);
-        executor = Executors.newFixedThreadPool(numExecutors,
-                new ThreadFactoryBuilder().setDaemon(true)
-                        .setNameFormat("Get-Input-Summary-%d").build());
-      } else {
-        LOG.info("Not using thread pool for getContentSummary");
-        executor = MoreExecutors.newDirectExecutorService();
-      }
-      getInputSummaryWithPool(ctx, Collections.unmodifiableSet(pathNeedProcess),
-          work, summary, executor);
-      perfLogger.PerfLogEnd(CLASS_NAME, PerfLogger.INPUT_SUMMARY);
     }
-    return new ContentSummary.Builder().length(summary[0])
-        .fileCount(summary[1]).directoryCount(summary[2]).build();
+    return new ContentSummary.Builder().length(summary[0]).fileCount(summary[1])
+        .directoryCount(summary[2]).build();
   }
 
   /**
@@ -3262,102 +3271,106 @@ public final class Utilities {
    * @return List of paths to process for the given MapWork
    * @throws Exception
    */
-  public static List<Path> getInputPaths(JobConf job, MapWork work, Path hiveScratchDir,
-      Context ctx, boolean skipDummy) throws Exception {
+  public static List<Path> getInputPaths(JobConf job, MapWork work,
+      Path hiveScratchDir, Context ctx, boolean skipDummy) throws Exception {
 
-    PerfLogger perfLogger = SessionState.getPerfLogger();
-    perfLogger.PerfLogBegin(CLASS_NAME, PerfLogger.INPUT_PATHS);
+    try (PerfTimer compileTimer =
+        SessionState.getPerfTimer(Driver.class, PerfTimedAction.INPUT_PATHS)) {
 
-    Set<Path> pathsProcessed = new HashSet<Path>();
-    List<Path> pathsToAdd = new LinkedList<Path>();
-    DriverState driverState = DriverState.getDriverState();
-    // AliasToWork contains all the aliases
-    Collection<String> aliasToWork = work.getAliasToWork().keySet();
-    if (!skipDummy) {
-      // ConcurrentModification otherwise if adding dummy.
-      aliasToWork = new ArrayList<>(aliasToWork);
-    }
-    for (String alias : aliasToWork) {
-      LOG.info("Processing alias {}", alias);
-
-      // The alias may not have any path
-      Collection<Map.Entry<Path, List<String>>> pathToAliases = work.getPathToAliases().entrySet();
+      Set<Path> pathsProcessed = new HashSet<Path>();
+      List<Path> pathsToAdd = new LinkedList<Path>();
+      DriverState driverState = DriverState.getDriverState();
+      // AliasToWork contains all the aliases
+      Collection<String> aliasToWork = work.getAliasToWork().keySet();
       if (!skipDummy) {
         // ConcurrentModification otherwise if adding dummy.
-        pathToAliases = new ArrayList<>(pathToAliases);
+        aliasToWork = new ArrayList<>(aliasToWork);
       }
-      boolean isEmptyTable = true;
-      boolean hasLogged = false;
+      for (String alias : aliasToWork) {
+        LOG.info("Processing alias {}", alias);
 
-      for (Map.Entry<Path, List<String>> e : pathToAliases) {
-        if (driverState != null && driverState.isAborted()) {
-          throw new IOException("Operation is Canceled.");
+        // The alias may not have any path
+        Collection<Map.Entry<Path, List<String>>> pathToAliases =
+            work.getPathToAliases().entrySet();
+        if (!skipDummy) {
+          // ConcurrentModification otherwise if adding dummy.
+          pathToAliases = new ArrayList<>(pathToAliases);
+        }
+        boolean isEmptyTable = true;
+        boolean hasLogged = false;
+
+        for (Map.Entry<Path, List<String>> e : pathToAliases) {
+          if (driverState != null && driverState.isAborted()) {
+            throw new IOException("Operation is Canceled.");
+          }
+
+          Path file = e.getKey();
+          List<String> aliases = e.getValue();
+          if (aliases.contains(alias)) {
+            if (file != null) {
+              isEmptyTable = false;
+            } else {
+              LOG.warn("Found a null path for alias {}", alias);
+              continue;
+            }
+
+            // Multiple aliases can point to the same path - it should be
+            // processed only once
+            if (pathsProcessed.contains(file)) {
+              continue;
+            }
+
+            StringInternUtils.internUriStringsInPath(file);
+            pathsProcessed.add(file);
+            LOG.debug("Adding input file {}", file);
+            if (!hasLogged) {
+              hasLogged = true;
+              LOG.info("Adding {} inputs; the first input is {}",
+                  work.getPathToAliases().size(), file);
+            }
+
+            pathsToAdd.add(file);
+          }
         }
 
-        Path file = e.getKey();
-        List<String> aliases = e.getValue();
-        if (aliases.contains(alias)) {
-          if (file != null) {
-            isEmptyTable = false;
-          } else {
-            LOG.warn("Found a null path for alias {}", alias);
-            continue;
-          }
-
-          // Multiple aliases can point to the same path - it should be
-          // processed only once
-          if (pathsProcessed.contains(file)) {
-            continue;
-          }
-
-          StringInternUtils.internUriStringsInPath(file);
-          pathsProcessed.add(file);
-          LOG.debug("Adding input file {}", file);
-          if (!hasLogged) {
-            hasLogged = true;
-            LOG.info("Adding {} inputs; the first input is {}",
-              work.getPathToAliases().size(), file);
-          }
-
-          pathsToAdd.add(file);
+        // If the query references non-existent partitions
+        // We need to add a empty file, it is not acceptable to change the
+        // operator tree
+        // Consider the query:
+        // select * from (select count(1) from T union all select count(1) from
+        // T2) x;
+        // If T is empty and T2 contains 100 rows, the user expects: 0, 100 (2
+        // rows)
+        if (isEmptyTable && !skipDummy) {
+          pathsToAdd.add(
+              createDummyFileForEmptyTable(job, work, hiveScratchDir, alias));
         }
       }
 
-      // If the query references non-existent partitions
-      // We need to add a empty file, it is not acceptable to change the
-      // operator tree
-      // Consider the query:
-      // select * from (select count(1) from T union all select count(1) from
-      // T2) x;
-      // If T is empty and T2 contains 100 rows, the user expects: 0, 100 (2
-      // rows)
-      if (isEmptyTable && !skipDummy) {
-        pathsToAdd.add(createDummyFileForEmptyTable(job, work, hiveScratchDir, alias));
+      List<Path> finalPathsToAdd = new LinkedList<>();
+
+      int numExecutors = getMaxExecutorsForInputListing(job, pathsToAdd.size());
+      if (numExecutors > 1) {
+        ExecutorService pool = Executors.newFixedThreadPool(numExecutors,
+            new ThreadFactoryBuilder().setDaemon(true)
+                .setNameFormat("Get-Input-Paths-%d").build());
+
+        finalPathsToAdd.addAll(getInputPathsWithPool(job, work, hiveScratchDir,
+            ctx, skipDummy, pathsToAdd, pool));
+      } else {
+        for (final Path path : pathsToAdd) {
+          if (driverState != null && driverState.isAborted()) {
+            throw new IOException("Operation is Canceled.");
+          }
+          Path newPath = new GetInputPathsCallable(path, job, work,
+              hiveScratchDir, ctx, skipDummy).call();
+          updatePathForMapWork(newPath, work, path);
+          finalPathsToAdd.add(newPath);
+        }
       }
+
+      return finalPathsToAdd;
     }
-
-    List<Path> finalPathsToAdd = new LinkedList<>();
-
-    int numExecutors = getMaxExecutorsForInputListing(job, pathsToAdd.size());
-    if (numExecutors > 1) {
-      ExecutorService pool = Executors.newFixedThreadPool(numExecutors,
-              new ThreadFactoryBuilder().setDaemon(true).setNameFormat("Get-Input-Paths-%d").build());
-
-      finalPathsToAdd.addAll(getInputPathsWithPool(job, work, hiveScratchDir, ctx, skipDummy, pathsToAdd, pool));
-    } else {
-      for (final Path path : pathsToAdd) {
-        if (driverState != null && driverState.isAborted()) {
-          throw new IOException("Operation is Canceled.");
-        }
-        Path newPath = new GetInputPathsCallable(path, job, work, hiveScratchDir, ctx, skipDummy).call();
-        updatePathForMapWork(newPath, work, path);
-        finalPathsToAdd.add(newPath);
-      }
-    }
-
-    perfLogger.PerfLogEnd(CLASS_NAME, PerfLogger.INPUT_PATHS);
-
-    return finalPathsToAdd;
   }
 
   @VisibleForTesting

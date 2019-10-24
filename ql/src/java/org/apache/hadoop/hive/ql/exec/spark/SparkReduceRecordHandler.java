@@ -37,12 +37,14 @@ import org.apache.hadoop.hive.ql.exec.vector.ColumnVector;
 import org.apache.hadoop.hive.ql.exec.vector.VectorDeserializeRow;
 import org.apache.hadoop.hive.ql.exec.vector.VectorizedBatchUtil;
 import org.apache.hadoop.hive.ql.exec.vector.VectorizedRowBatch;
-import org.apache.hadoop.hive.ql.log.PerfLogger;
+import org.apache.hadoop.hive.ql.log.PerfTimedAction;
+import org.apache.hadoop.hive.ql.log.PerfTimer;
 import org.apache.hadoop.hive.ql.metadata.HiveException;
 import org.apache.hadoop.hive.ql.plan.MapredLocalWork;
 import org.apache.hadoop.hive.ql.plan.OperatorDesc;
 import org.apache.hadoop.hive.ql.plan.ReduceWork;
 import org.apache.hadoop.hive.ql.plan.TableDesc;
+import org.apache.hadoop.hive.ql.session.SessionState;
 import org.apache.hadoop.hive.serde2.Deserializer;
 import org.apache.hadoop.hive.serde2.SerDeException;
 import org.apache.hadoop.hive.serde2.SerDeUtils;
@@ -117,9 +119,16 @@ public class SparkReduceRecordHandler extends SparkRecordHandler {
   private MapredLocalWork localWork = null;
 
   @Override
+  public void init(JobConf job, OutputCollector output, Reporter reporter)
+      throws Exception {
+    try (PerfTimer compileTimer = SessionState.getPerfTimer(
+        SparkRecordHandler.class, PerfTimedAction.SPARK_INIT_OPERATORS)) {
+      doInit(job, output, reporter);
+    }
+  }
+
   @SuppressWarnings("unchecked")
-  public void init(JobConf job, OutputCollector output, Reporter reporter) throws Exception {
-    perfLogger.PerfLogBegin(CLASS_NAME, PerfLogger.SPARK_INIT_OPERATORS);
+  protected void doInit(JobConf job, OutputCollector output, Reporter reporter) throws Exception {
     super.init(job, output, reporter);
 
     rowObjectInspector = new ObjectInspector[Byte.MAX_VALUE];
@@ -253,7 +262,6 @@ public class SparkReduceRecordHandler extends SparkRecordHandler {
         throw new RuntimeException("Reduce operator initialization failed", e);
       }
     }
-    perfLogger.PerfLogEnd(CLASS_NAME, PerfLogger.SPARK_INIT_OPERATORS);
   }
 
   /**

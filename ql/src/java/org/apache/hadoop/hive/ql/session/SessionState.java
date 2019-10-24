@@ -39,6 +39,7 @@ import java.util.LinkedHashMap;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CancellationException;
@@ -88,6 +89,9 @@ import org.apache.hadoop.hive.ql.lockmgr.HiveTxnManager;
 import org.apache.hadoop.hive.ql.lockmgr.LockException;
 import org.apache.hadoop.hive.ql.lockmgr.TxnManagerFactory;
 import org.apache.hadoop.hive.ql.log.PerfLogger;
+import org.apache.hadoop.hive.ql.log.PerfTimedAction;
+import org.apache.hadoop.hive.ql.log.PerfTimer;
+import org.apache.hadoop.hive.ql.log.PerfTimerFactory;
 import org.apache.hadoop.hive.ql.metadata.Hive;
 import org.apache.hadoop.hive.ql.metadata.HiveException;
 import org.apache.hadoop.hive.ql.metadata.HiveUtils;
@@ -1863,22 +1867,26 @@ public class SessionState {
   }
 
   /**
-   * @return  Tries to return an instance of the class whose name is configured in
-   *          hive.exec.perf.logger, but if it can't it just returns an instance of
-   *          the base PerfLogger class
+   * @return Tries to return an instance of the class whose name is configured
+   *         in hive.exec.perf.logger, but if it can't it just returns an
+   *         instance of the base PerfLogger class
    *
+   * @deprecated Use {@link PerfTimer}s
    */
+  @Deprecated
   public static PerfLogger getPerfLogger() {
     return getPerfLogger(false);
   }
 
   /**
    * @param resetPerfLogger
-   * @return  Tries to return an instance of the class whose name is configured in
-   *          hive.exec.perf.logger, but if it can't it just returns an instance of
-   *          the base PerfLogger class
+   * @return Tries to return an instance of the class whose name is configured
+   *         in hive.exec.perf.logger, but if it can't it just returns an
+   *         instance of the base PerfLogger class
    *
+   * @deprecated Use {@link PerfTimer}s
    */
+  @Deprecated
   public static PerfLogger getPerfLogger(boolean resetPerfLogger) {
     SessionState ss = get();
     if (ss == null) {
@@ -1886,6 +1894,22 @@ public class SessionState {
     } else {
       return PerfLogger.getPerfLogger(ss.getConf(), resetPerfLogger);
     }
+  }
+
+  public static PerfTimer getPerfTimer(final Class<?> clazz, final PerfTimedAction action) {
+    return getPerfTimer(clazz, action, null);
+  }
+
+  public static PerfTimer getPerfTimer(final Class<?> clazz,
+      final PerfTimedAction action, final String extra) {
+    final Optional<SessionState> ss = Optional.ofNullable(get());
+    final Optional<HiveConf> conf =
+        ss.isPresent() ? Optional.of(ss.get().getConf()) : Optional.empty();
+    final Optional<String> sessionId =
+        ss.isPresent() ? Optional.of(ss.get().getSessionId())
+            : Optional.empty();
+    return PerfTimerFactory.getPerfTimer(sessionId, conf, clazz, action,
+        Optional.ofNullable(extra));
   }
 
   public TezSessionState getTezSession() {

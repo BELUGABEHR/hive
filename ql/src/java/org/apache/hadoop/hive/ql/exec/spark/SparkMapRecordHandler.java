@@ -24,6 +24,7 @@ import java.util.List;
 
 import org.apache.hadoop.hive.ql.plan.PartitionDesc;
 import org.apache.hadoop.hive.ql.plan.TableDesc;
+import org.apache.hadoop.hive.ql.session.SessionState;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.apache.hadoop.hive.ql.CompilationOpContext;
@@ -36,7 +37,8 @@ import org.apache.hadoop.hive.ql.exec.Utilities;
 import org.apache.hadoop.hive.ql.exec.mr.ExecMapper.ReportStats;
 import org.apache.hadoop.hive.ql.exec.mr.ExecMapperContext;
 import org.apache.hadoop.hive.ql.exec.vector.VectorMapOperator;
-import org.apache.hadoop.hive.ql.log.PerfLogger;
+import org.apache.hadoop.hive.ql.log.PerfTimedAction;
+import org.apache.hadoop.hive.ql.log.PerfTimer;
 import org.apache.hadoop.hive.ql.plan.MapWork;
 import org.apache.hadoop.hive.ql.plan.MapredLocalWork;
 import org.apache.hadoop.hive.ql.plan.OperatorDesc;
@@ -63,8 +65,16 @@ public class SparkMapRecordHandler extends SparkRecordHandler {
   private ExecMapperContext execContext;
 
   @Override
-  public <K, V> void init(JobConf job, OutputCollector<K, V> output, Reporter reporter) throws Exception {
-    perfLogger.PerfLogBegin(CLASS_NAME, PerfLogger.SPARK_INIT_OPERATORS);
+  public <K, V> void init(JobConf job, OutputCollector<K, V> output,
+      Reporter reporter) throws Exception {
+    try (PerfTimer compileTimer = SessionState.getPerfTimer(
+        SparkRecordHandler.class, PerfTimedAction.SPARK_INIT_OPERATORS)) {
+      doInit(job, output, reporter);
+    }
+  }
+
+  protected <K, V> void doInit(JobConf job, OutputCollector<K, V> output,
+      Reporter reporter) throws Exception {
     super.init(job, output, reporter);
 
     try {
@@ -124,7 +134,6 @@ public class SparkMapRecordHandler extends SparkRecordHandler {
         throw new RuntimeException("Map operator initialization failed: " + e, e);
       }
     }
-    perfLogger.PerfLogEnd(CLASS_NAME, PerfLogger.SPARK_INIT_OPERATORS);
   }
 
   @Override

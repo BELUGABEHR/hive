@@ -33,9 +33,11 @@ import org.apache.hadoop.hive.ql.exec.Utilities;
 import org.apache.hadoop.hive.ql.exec.mr.ExecMapper;
 import org.apache.hadoop.hive.ql.exec.mr.ExecMapperContext;
 import org.apache.hadoop.hive.ql.io.merge.MergeFileWork;
-import org.apache.hadoop.hive.ql.log.PerfLogger;
+import org.apache.hadoop.hive.ql.log.PerfTimer;
+import org.apache.hadoop.hive.ql.log.PerfTimedAction;
 import org.apache.hadoop.hive.ql.plan.MapWork;
 import org.apache.hadoop.hive.ql.plan.OperatorDesc;
+import org.apache.hadoop.hive.ql.session.SessionState;
 import org.apache.hadoop.mapred.JobConf;
 import org.apache.hadoop.util.StringUtils;
 import org.apache.tez.mapreduce.input.MRInputLegacy;
@@ -74,75 +76,82 @@ public class MergeFileRecordProcessor extends RecordProcessor {
       MRTaskReporter mrReporter, Map<String, LogicalInput> inputs,
       Map<String, LogicalOutput> outputs) throws Exception {
     // TODO HIVE-14042. Abort handling.
-    perfLogger.PerfLogBegin(CLASS_NAME, PerfLogger.TEZ_INIT_OPERATORS);
-    super.init(mrReporter, inputs, outputs);
-    execContext = new ExecMapperContext(jconf);
 
-    //Update JobConf using MRInput, info like filename comes via this
-    mrInput = getMRInput(inputs);
-    Configuration updatedConf = mrInput.getConfigUpdates();
-    if (updatedConf != null) {
-      for (Map.Entry<String, String> entry : updatedConf) {
-        jconf.set(entry.getKey(), entry.getValue());
-      }
-    }
-    createOutputMap();
-    // Start all the Outputs.
-    for (Map.Entry<String, LogicalOutput> outputEntry : outputs.entrySet()) {
-      outputEntry.getValue().start();
-      ((TezProcessor.TezKVOutputCollector) outMap.get(outputEntry.getKey()))
-          .initialize();
-    }
+    try (
+        PerfTimer runJobTimer = SessionState.getPerfTimer(RecordProcessor.class,
+            PerfTimedAction.TEZ_INIT_OPERATORS)) {
 
-    String queryId = HiveConf.getVar(jconf, HiveConf.ConfVars.HIVEQUERYID);
-    cache = ObjectCacheFactory.getCache(jconf, queryId, true);
+      super.init(mrReporter, inputs, outputs);
+      execContext = new ExecMapperContext(jconf);
 
-    try {
-      execContext.setJc(jconf);
-
-      cacheKey = MAP_PLAN_KEY;
-
-      MapWork mapWork = (MapWork) cache.retrieve(cacheKey, new Callable<Object>() {
-        @Override
-        public Object call() {
-          return Utilities.getMapWork(jconf);
+      // Update JobConf using MRInput, info like filename comes via this
+      mrInput = getMRInput(inputs);
+      Configuration updatedConf = mrInput.getConfigUpdates();
+      if (updatedConf != null) {
+        for (Map.Entry<String, String> entry : updatedConf) {
+          jconf.set(entry.getKey(), entry.getValue());
         }
-      });
-      Utilities.setMapWork(jconf, mapWork);
-
-      if (mapWork instanceof MergeFileWork) {
-        mfWork = (MergeFileWork) mapWork;
-      } else {
-        throw new RuntimeException("MapWork should be an instance of MergeFileWork.");
+      }
+      createOutputMap();
+      // Start all the Outputs.
+      for (Map.Entry<String, LogicalOutput> outputEntry : outputs.entrySet()) {
+        outputEntry.getValue().start();
+        ((TezProcessor.TezKVOutputCollector) outMap.get(outputEntry.getKey()))
+            .initialize();
       }
 
-      String alias = mfWork.getAliasToWork().keySet().iterator().next();
-      mergeOp = mfWork.getAliasToWork().get(alias);
-      LOG.info(mergeOp.dump(0));
+      String queryId = HiveConf.getVar(jconf, HiveConf.ConfVars.HIVEQUERYID);
+      cache = ObjectCacheFactory.getCache(jconf, queryId, true);
 
-      MapredContext.init(true, new JobConf(jconf));
-      ((TezContext) MapredContext.get()).setInputs(inputs);
-      mergeOp.passExecContext(execContext);
-      mergeOp.initializeLocalWork(jconf);
-      mergeOp.initialize(jconf, null);
+      try {
+        execContext.setJc(jconf);
 
-      OperatorUtils.setChildrenCollector(mergeOp.getChildOperators(), outMap);
-      mergeOp.setReporter(reporter);
-      MapredContext.get().setReporter(reporter);
-    } catch (Throwable e) {
-      if (e instanceof OutOfMemoryError) {
-        // will this be true here?
-        // Don't create a new object if we are already out of memory
-        throw (OutOfMemoryError) e;
-      } else if (e instanceof InterruptedException) {
-        LOG.info("Hit an interrupt while initializing MergeFileRecordProcessor. Message={}",
-            e.getMessage());
-        throw (InterruptedException) e;
-      } else {
-        throw new RuntimeException("Map operator initialization failed", e);
+        cacheKey = MAP_PLAN_KEY;
+
+        MapWork mapWork =
+            (MapWork) cache.retrieve(cacheKey, new Callable<Object>() {
+              @Override
+              public Object call() {
+                return Utilities.getMapWork(jconf);
+              }
+            });
+        Utilities.setMapWork(jconf, mapWork);
+
+        if (mapWork instanceof MergeFileWork) {
+          mfWork = (MergeFileWork) mapWork;
+        } else {
+          throw new RuntimeException(
+              "MapWork should be an instance of MergeFileWork.");
+        }
+
+        String alias = mfWork.getAliasToWork().keySet().iterator().next();
+        mergeOp = mfWork.getAliasToWork().get(alias);
+        LOG.info(mergeOp.dump(0));
+
+        MapredContext.init(true, new JobConf(jconf));
+        ((TezContext) MapredContext.get()).setInputs(inputs);
+        mergeOp.passExecContext(execContext);
+        mergeOp.initializeLocalWork(jconf);
+        mergeOp.initialize(jconf, null);
+
+        OperatorUtils.setChildrenCollector(mergeOp.getChildOperators(), outMap);
+        mergeOp.setReporter(reporter);
+        MapredContext.get().setReporter(reporter);
+      } catch (Throwable e) {
+        if (e instanceof OutOfMemoryError) {
+          // will this be true here?
+          // Don't create a new object if we are already out of memory
+          throw (OutOfMemoryError) e;
+        } else if (e instanceof InterruptedException) {
+          LOG.info(
+              "Hit an interrupt while initializing MergeFileRecordProcessor. Message={}",
+              e.getMessage());
+          throw (InterruptedException) e;
+        } else {
+          throw new RuntimeException("Map operator initialization failed", e);
+        }
       }
     }
-    perfLogger.PerfLogEnd(CLASS_NAME, PerfLogger.TEZ_INIT_OPERATORS);
   }
 
   @Override

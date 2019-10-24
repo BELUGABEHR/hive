@@ -41,11 +41,13 @@ import org.apache.hadoop.hive.ql.exec.Utilities;
 import org.apache.hadoop.hive.ql.exec.mr.ExecMapper.ReportStats;
 import org.apache.hadoop.hive.ql.exec.tez.DynamicValueRegistryTez.RegistryConfTez;
 import org.apache.hadoop.hive.ql.exec.tez.TezProcessor.TezKVOutputCollector;
-import org.apache.hadoop.hive.ql.log.PerfLogger;
+import org.apache.hadoop.hive.ql.log.PerfTimedAction;
+import org.apache.hadoop.hive.ql.log.PerfTimer;
 import org.apache.hadoop.hive.ql.plan.BaseWork;
 import org.apache.hadoop.hive.ql.plan.DynamicValue;
 import org.apache.hadoop.hive.ql.plan.ReduceWork;
 import org.apache.hadoop.hive.ql.plan.TableDesc;
+import org.apache.hadoop.hive.ql.session.SessionState;
 import org.apache.hadoop.hive.serde2.objectinspector.ObjectInspector;
 import org.apache.hadoop.mapred.JobConf;
 import org.apache.tez.mapreduce.processor.MRTaskReporter;
@@ -99,9 +101,17 @@ public class ReduceRecordProcessor extends RecordProcessor {
   }
 
   @Override
-  void init(MRTaskReporter mrReporter, Map<String, LogicalInput> inputs, Map<String, LogicalOutput> outputs)
+  void init(MRTaskReporter mrReporter, Map<String, LogicalInput> inputs,
+      Map<String, LogicalOutput> outputs) throws Exception {
+    try (PerfTimer initTimer = SessionState.getPerfTimer(RecordProcessor.class,
+        PerfTimedAction.TEZ_INIT_OPERATORS)) {
+      doInit(mrReporter, inputs, outputs);
+    }
+  }
+
+  void doInit(MRTaskReporter mrReporter, Map<String, LogicalInput> inputs, Map<String, LogicalOutput> outputs)
       throws Exception {
-    perfLogger.PerfLogBegin(CLASS_NAME, PerfLogger.TEZ_INIT_OPERATORS);
+
     super.init(mrReporter, inputs, outputs);
 
     MapredContext.init(false, new JobConf(jconf));
@@ -240,8 +250,6 @@ public class ReduceRecordProcessor extends RecordProcessor {
         throw new RuntimeException(redWork.getName() + " operator initialization failed", e);
       }
     }
-
-    perfLogger.PerfLogEnd(CLASS_NAME, PerfLogger.TEZ_INIT_OPERATORS);
   }
 
   private void initializeMultipleSources(ReduceWork redWork, int numTags, ObjectInspector[] ois,

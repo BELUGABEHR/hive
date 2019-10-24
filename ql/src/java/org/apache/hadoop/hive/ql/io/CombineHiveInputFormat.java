@@ -46,7 +46,8 @@ import org.apache.hadoop.fs.PathFilter;
 import org.apache.hadoop.hive.ql.DriverState;
 import org.apache.hadoop.hive.ql.exec.Operator;
 import org.apache.hadoop.hive.ql.exec.Utilities;
-import org.apache.hadoop.hive.ql.log.PerfLogger;
+import org.apache.hadoop.hive.ql.log.PerfTimedAction;
+import org.apache.hadoop.hive.ql.log.PerfTimer;
 import org.apache.hadoop.hive.ql.parse.SplitSample;
 import org.apache.hadoop.hive.ql.plan.OperatorDesc;
 import org.apache.hadoop.hive.ql.plan.PartitionDesc;
@@ -75,8 +76,8 @@ import org.apache.hadoop.mapred.lib.CombineFileSplit;
 public class CombineHiveInputFormat<K extends WritableComparable, V extends Writable>
     extends HiveInputFormat<K, V> {
 
-  private static final String CLASS_NAME = CombineHiveInputFormat.class.getName();
-  public static final Logger LOG = LoggerFactory.getLogger(CLASS_NAME);
+  public static final Logger LOG =
+      LoggerFactory.getLogger(CombineHiveInputFormat.class);
 
   // max number of threads we can use to check non-combinable paths
   private static final int MAX_CHECK_NONCOMBINABLE_THREAD_NUM = 50;
@@ -342,7 +343,7 @@ public class CombineHiveInputFormat<K extends WritableComparable, V extends Writ
 
     InputSplit[] splits = null;
     if (combine == null) {
-      splits = super.getSplits(job, numSplits);
+      splits = super.doGetSplits(job, numSplits);
       return splits;
     }
 
@@ -371,7 +372,7 @@ public class CombineHiveInputFormat<K extends WritableComparable, V extends Writ
           pathToPartitionInfo, path, IOPrepareCache.get().allocatePartitionDescMap());
       TableDesc tableDesc = part.getTableDesc();
       if ((tableDesc != null) && tableDesc.isNonNative()) {
-        return super.getSplits(job, numSplits);
+        return super.doGetSplits(job, numSplits);
       }
 
       // Use HiveInputFormat if any of the paths is not splittable
@@ -388,7 +389,7 @@ public class CombineHiveInputFormat<K extends WritableComparable, V extends Writ
 
       //don't combine if inputformat is a SymlinkTextInputFormat
       if (inputFormat instanceof SymlinkTextInputFormat) {
-        splits = super.getSplits(job, numSplits);
+        splits = super.doGetSplits(job, numSplits);
         return splits;
       }
 
@@ -498,13 +499,19 @@ public class CombineHiveInputFormat<K extends WritableComparable, V extends Writ
     }
   }
 
+
   /**
    * Create Hive splits based on CombineFileSplit.
    */
   @Override
   public InputSplit[] getSplits(JobConf job, int numSplits) throws IOException {
-    PerfLogger perfLogger = SessionState.getPerfLogger();
-    perfLogger.PerfLogBegin(CLASS_NAME, PerfLogger.GET_SPLITS);
+    try (PerfTimer splitTimer = SessionState.getPerfTimer(CombineHiveInputFormat.class,
+        PerfTimedAction.GET_SPLITS)) {
+      return doGetSplits(job, numSplits);
+    }
+  }
+
+  public InputSplit[] doGetSplits(JobConf job, int numSplits) throws IOException {
     init(job);
 
     ArrayList<InputSplit> result = new ArrayList<InputSplit>();
@@ -532,7 +539,6 @@ public class CombineHiveInputFormat<K extends WritableComparable, V extends Writ
         }
       } catch (Exception e) {
         LOG.error("Error checking non-combinable path", e);
-        perfLogger.PerfLogEnd(CLASS_NAME, PerfLogger.GET_SPLITS);
         throw new IOException(e);
       }
     }
@@ -549,7 +555,7 @@ public class CombineHiveInputFormat<K extends WritableComparable, V extends Writ
     if (nonCombinablePaths.size() > 0) {
       FileInputFormat.setInputPaths(job, nonCombinablePaths.toArray
           (new Path[nonCombinablePaths.size()]));
-      InputSplit[] splits = super.getSplits(job, numSplits);
+      InputSplit[] splits = super.doGetSplits(job, numSplits);
       for (InputSplit split : splits) {
         result.add(split);
       }
@@ -585,7 +591,6 @@ public class CombineHiveInputFormat<K extends WritableComparable, V extends Writ
     }
 
     LOG.info("Number of all splits " + result.size());
-    perfLogger.PerfLogEnd(CLASS_NAME, PerfLogger.GET_SPLITS);
     return result.toArray(new InputSplit[result.size()]);
   }
 

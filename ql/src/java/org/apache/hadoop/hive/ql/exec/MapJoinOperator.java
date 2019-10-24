@@ -57,7 +57,8 @@ import org.apache.hadoop.hive.ql.exec.spark.SparkUtilities;
 import org.apache.hadoop.hive.ql.exec.tez.LlapObjectCache;
 import org.apache.hadoop.hive.ql.exec.tez.LlapObjectSubCache;
 import org.apache.hadoop.hive.ql.io.HiveKey;
-import org.apache.hadoop.hive.ql.log.PerfLogger;
+import org.apache.hadoop.hive.ql.log.PerfTimer;
+import org.apache.hadoop.hive.ql.log.PerfTimedAction;
 import org.apache.hadoop.hive.ql.metadata.HiveException;
 import org.apache.hadoop.hive.ql.plan.JoinCondDesc;
 import org.apache.hadoop.hive.ql.plan.JoinDesc;
@@ -90,8 +91,6 @@ public class MapJoinOperator extends AbstractMapJoinOperator<MapJoinDesc> implem
 
   private static final long serialVersionUID = 1L;
   private static final Logger LOG = LoggerFactory.getLogger(MapJoinOperator.class.getName());
-  private static final String CLASS_NAME = MapJoinOperator.class.getName();
-  private transient final PerfLogger perfLogger = SessionState.getPerfLogger();
 
   private transient String cacheKey;
   private transient ObjectCache cache;
@@ -380,32 +379,32 @@ public class MapJoinOperator extends AbstractMapJoinOperator<MapJoinDesc> implem
   // Core logic to load hash table using HashTableLoader
   private Pair<MapJoinTableContainer[], MapJoinTableContainerSerDe[]> loadHashTableInternal(
           ExecMapperContext mapContext, MapredContext mrContext) throws HiveException {
-    perfLogger.PerfLogBegin(CLASS_NAME, PerfLogger.LOAD_HASHTABLE);
-    loader.init(mapContext, mrContext, hconf, this);
-    try {
-      loader.load(mapJoinTables, mapJoinTableSerdes);
-    } catch (HiveException e) {
-      if (LOG.isInfoEnabled()) {
-        LOG.info("Exception loading hash tables. Clearing partially loaded hash table containers.");
+
+    try (PerfTimer compileTimer = SessionState
+        .getPerfTimer(MapJoinOperator.class, PerfTimedAction.LOAD_HASHTABLE)) {
+      loader.init(mapContext, mrContext, hconf, this);
+      try {
+        loader.load(mapJoinTables, mapJoinTableSerdes);
+      } catch (HiveException e) {
+        LOG.info(
+            "Exception loading hash tables. Clearing partially loaded hash table containers.");
+
+        // there could be some spilled partitions which needs to be cleaned up
+        clearAllTableContainers();
+        throw e;
       }
 
-      // there could be some spilled partitions which needs to be cleaned up
-      clearAllTableContainers();
-      throw e;
+      hashTblInitedOnce = true;
+
+      Pair<MapJoinTableContainer[], MapJoinTableContainerSerDe[]> pair =
+          new ImmutablePair<>(mapJoinTables, mapJoinTableSerdes);
+
+      if (canSkipJoinProcessing(mapContext)) {
+        LOG.info("Skipping big table join processing for {}", this);
+        this.setDone(true);
+      }
+      return pair;
     }
-
-    hashTblInitedOnce = true;
-
-    Pair<MapJoinTableContainer[], MapJoinTableContainerSerDe[]> pair =
-            new ImmutablePair<> (mapJoinTables, mapJoinTableSerdes);
-
-    perfLogger.PerfLogEnd(CLASS_NAME, PerfLogger.LOAD_HASHTABLE);
-
-    if (canSkipJoinProcessing(mapContext)) {
-      LOG.info("Skipping big table join processing for " + this.toString());
-      this.setDone(true);
-    }
-    return pair;
   }
 
   // Load Hash table for Bucket MapJoin

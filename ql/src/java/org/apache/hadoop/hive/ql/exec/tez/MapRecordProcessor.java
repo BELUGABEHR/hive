@@ -30,6 +30,7 @@ import java.util.Set;
 import org.apache.hadoop.hive.llap.LlapUtil;
 import org.apache.hadoop.hive.ql.plan.PartitionDesc;
 import org.apache.hadoop.hive.ql.plan.TableDesc;
+import org.apache.hadoop.hive.ql.session.SessionState;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.apache.hadoop.conf.Configuration;
@@ -55,7 +56,8 @@ import org.apache.hadoop.hive.ql.exec.tez.DynamicValueRegistryTez.RegistryConfTe
 import org.apache.hadoop.hive.ql.exec.tez.TezProcessor.TezKVOutputCollector;
 import org.apache.hadoop.hive.ql.exec.tez.tools.KeyValueInputMerger;
 import org.apache.hadoop.hive.ql.exec.vector.VectorMapOperator;
-import org.apache.hadoop.hive.ql.log.PerfLogger;
+import org.apache.hadoop.hive.ql.log.PerfTimedAction;
+import org.apache.hadoop.hive.ql.log.PerfTimer;
 import org.apache.hadoop.hive.ql.plan.BaseWork;
 import org.apache.hadoop.hive.ql.plan.DynamicValue;
 import org.apache.hadoop.hive.ql.plan.MapWork;
@@ -116,7 +118,8 @@ public class MapRecordProcessor extends RecordProcessor {
   @Override
   void init(MRTaskReporter mrReporter,
       Map<String, LogicalInput> inputs, Map<String, LogicalOutput> outputs) throws Exception {
-    perfLogger.PerfLogBegin(CLASS_NAME, PerfLogger.TEZ_INIT_OPERATORS);
+    final PerfTimer perfTimer = SessionState.getPerfTimer(
+        RecordProcessor.class, PerfTimedAction.TEZ_INIT_OPERATORS);
     super.init(mrReporter, inputs, outputs);
     checkAbortCondition();
 
@@ -340,7 +343,7 @@ public class MapRecordProcessor extends RecordProcessor {
         throw new RuntimeException("Map operator initialization failed", e);
       }
     }
-    perfLogger.PerfLogEnd(CLASS_NAME, PerfLogger.TEZ_INIT_OPERATORS);
+    perfTimer.close();
   }
 
   private void initializeMapRecordSources() throws Exception {

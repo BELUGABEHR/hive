@@ -133,7 +133,8 @@ import org.apache.hadoop.hive.ql.exec.OperatorFactory;
 import org.apache.hadoop.hive.ql.exec.RowSchema;
 import org.apache.hadoop.hive.ql.exec.Utilities;
 import org.apache.hadoop.hive.ql.lib.Node;
-import org.apache.hadoop.hive.ql.log.PerfLogger;
+import org.apache.hadoop.hive.ql.log.PerfTimedAction;
+import org.apache.hadoop.hive.ql.log.PerfTimer;
 import org.apache.hadoop.hive.ql.metadata.HiveException;
 import org.apache.hadoop.hive.ql.metadata.NotNullConstraint;
 import org.apache.hadoop.hive.ql.metadata.PrimaryKeyInfo;
@@ -1759,10 +1760,10 @@ public class CalcitePlanner extends SemanticAnalyzer {
       this.cluster = optCluster;
       this.relOptSchema = relOptSchema;
 
-      PerfLogger perfLogger = SessionState.getPerfLogger();
       // 1. Gen Calcite Plan
-      perfLogger.PerfLogBegin(this.getClass().getName(), PerfLogger.OPTIMIZER);
-      try {
+      try (PerfTimer compileTimer = SessionState.getPerfTimer(
+          CalcitePlanner.class, PerfTimedAction.OPTIMIZER,
+          "Calcite: Plan generation")) {
         calciteGenPlan = genLogicalPlan(getQB(), true, null, null);
         // if it is to create view, we do not use table alias
         resultSchema = convertRowSchemaToResultSetSchema(relToHiveRR.get(calciteGenPlan),
@@ -1772,7 +1773,6 @@ public class CalcitePlanner extends SemanticAnalyzer {
         semanticException = e;
         throw new RuntimeException(e);
       }
-      perfLogger.PerfLogEnd(this.getClass().getName(), PerfLogger.OPTIMIZER, "Calcite: Plan generation");
 
       // Create executor
       RexExecutor executorProvider = new HiveRexExecutorImpl(optCluster);
@@ -1872,8 +1872,6 @@ public class CalcitePlanner extends SemanticAnalyzer {
       // TODO: Decorelation of subquery should be done before attempting
       // Partition Pruning; otherwise Expression evaluation may try to execute
       // corelated sub query.
-
-      PerfLogger perfLogger = SessionState.getPerfLogger();
 
       final int maxCNFNodeCount = conf.getIntVar(HiveConf.ConfVars.HIVE_CBO_CNF_NODES_LIMIT);
       final int minNumORClauses = conf.getIntVar(HiveConf.ConfVars.HIVEPOINTLOOKUPOPTIMIZERMIN);
@@ -2009,10 +2007,12 @@ public class CalcitePlanner extends SemanticAnalyzer {
       }
 
       // Trigger program
-      perfLogger.PerfLogBegin(this.getClass().getName(), PerfLogger.OPTIMIZER);
-      basePlan = executeProgram(basePlan, program.build(), mdProvider, executorProvider);
-      perfLogger.PerfLogEnd(this.getClass().getName(), PerfLogger.OPTIMIZER,
-          "Calcite: Prejoin ordering transformation");
+      try (PerfTimer optimizerTimer = SessionState.getPerfTimer(
+          CalcitePlanner.class, PerfTimedAction.OPTIMIZER,
+          "Calcite: Prejoin ordering transformation")) {
+        basePlan = executeProgram(basePlan, program.build(), mdProvider,
+            executorProvider);
+      }
 
       return basePlan;
     }
@@ -2020,7 +2020,6 @@ public class CalcitePlanner extends SemanticAnalyzer {
     private RelNode applyMaterializedViewRewriting(RelOptPlanner planner, RelNode basePlan,
         RelMetadataProvider mdProvider, RexExecutor executorProvider) {
       final RelOptCluster optCluster = basePlan.getCluster();
-      final PerfLogger perfLogger = SessionState.getPerfLogger();
 
       final boolean useMaterializedViewsRegistry = !conf.get(HiveConf.ConfVars.HIVE_SERVER2_MATERIALIZED_VIEWS_REGISTRY_IMPL.varname)
           .equals("DUMMY");
@@ -2102,50 +2101,57 @@ public class CalcitePlanner extends SemanticAnalyzer {
         return calcitePreMVRewritingPlan;
       }
 
-      perfLogger.PerfLogBegin(this.getClass().getName(), PerfLogger.OPTIMIZER);
+      try (PerfTimer compileTimer = SessionState.getPerfTimer(
+          CalcitePlanner.class, PerfTimedAction.OPTIMIZER,
+          "Calcite: View-based rewriting")) {
 
-      if (mvRebuild) {
-        // If it is a materialized view rebuild, we use the HepPlanner, since we only have
-        // one MV and we would like to use it to create incremental maintenance plans
-        final HepProgramBuilder program = new HepProgramBuilder();
-        generatePartialProgram(program, true, HepMatchOrder.TOP_DOWN,
-            HiveMaterializedViewRule.MATERIALIZED_VIEW_REWRITING_RULES);
-        // Add materialization for rebuild to planner
-        assert materializations.size() == 1;
-        // Optimize plan
-        basePlan = executeProgram(basePlan, program.build(), mdProvider, executorProvider, materializations);
-      } else {
-        // If this is not a rebuild, we use Volcano planner as the decision
-        // on whether to use MVs or not and which MVs to use should be cost-based
-        optCluster.invalidateMetadataQuery();
-        RelMetadataQuery.THREAD_PROVIDERS.set(JaninoRelMetadataProvider.DEFAULT);
+        if (mvRebuild) {
+          // If it is a materialized view rebuild, we use the HepPlanner, since
+          // we only have
+          // one MV and we would like to use it to create incremental
+          // maintenance plans
+          final HepProgramBuilder program = new HepProgramBuilder();
+          generatePartialProgram(program, true, HepMatchOrder.TOP_DOWN,
+              HiveMaterializedViewRule.MATERIALIZED_VIEW_REWRITING_RULES);
+          // Add materialization for rebuild to planner
+          assert materializations.size() == 1;
+          // Optimize plan
+          basePlan = executeProgram(basePlan, program.build(), mdProvider,
+              executorProvider, materializations);
+        } else {
+          // If this is not a rebuild, we use Volcano planner as the decision
+          // on whether to use MVs or not and which MVs to use should be
+          // cost-based
+          optCluster.invalidateMetadataQuery();
+          RelMetadataQuery.THREAD_PROVIDERS
+              .set(JaninoRelMetadataProvider.DEFAULT);
 
-        // Add materializations to planner
-        for (RelOptMaterialization materialization : materializations) {
-          planner.addMaterialization(materialization);
+          // Add materializations to planner
+          for (RelOptMaterialization materialization : materializations) {
+            planner.addMaterialization(materialization);
+          }
+          // Add rule to split aggregate with grouping sets (if any)
+          planner.addRule(HiveAggregateSplitRule.INSTANCE);
+          // Add view-based rewriting rules to planner
+          for (RelOptRule rule : HiveMaterializedViewRule.MATERIALIZED_VIEW_REWRITING_RULES) {
+            planner.addRule(rule);
+          }
+          // Partition pruner rule
+          planner.addRule(HiveFilterProjectTSTransposeRule.INSTANCE);
+          planner.addRule(new HivePartitionPruneRule(conf));
+
+          // Optimize plan
+          planner.setRoot(basePlan);
+          basePlan = planner.findBestExp();
+          // Remove view-based rewriting rules from planner
+          planner.clear();
+
+          // Restore default cost model
+          optCluster.invalidateMetadataQuery();
+          RelMetadataQuery.THREAD_PROVIDERS
+              .set(JaninoRelMetadataProvider.of(mdProvider));
         }
-        // Add rule to split aggregate with grouping sets (if any)
-        planner.addRule(HiveAggregateSplitRule.INSTANCE);
-        // Add view-based rewriting rules to planner
-        for (RelOptRule rule : HiveMaterializedViewRule.MATERIALIZED_VIEW_REWRITING_RULES) {
-          planner.addRule(rule);
-        }
-        // Partition pruner rule
-        planner.addRule(HiveFilterProjectTSTransposeRule.INSTANCE);
-        planner.addRule(new HivePartitionPruneRule(conf));
-
-        // Optimize plan
-        planner.setRoot(basePlan);
-        basePlan = planner.findBestExp();
-        // Remove view-based rewriting rules from planner
-        planner.clear();
-
-        // Restore default cost model
-        optCluster.invalidateMetadataQuery();
-        RelMetadataQuery.THREAD_PROVIDERS.set(JaninoRelMetadataProvider.of(mdProvider));
       }
-
-      perfLogger.PerfLogEnd(this.getClass().getName(), PerfLogger.OPTIMIZER, "Calcite: View-based rewriting");
 
       List<Table> materializedViewsUsedOriginalPlan = getMaterializedViewsUsed(calcitePreMVRewritingPlan);
       List<Table> materializedViewsUsedAfterRewrite = getMaterializedViewsUsed(basePlan);
@@ -2225,7 +2231,6 @@ public class CalcitePlanner extends SemanticAnalyzer {
      * @return
      */
     private RelNode applyJoinOrderingTransform(RelNode basePlan, RelMetadataProvider mdProvider, RexExecutor executorProvider) {
-      PerfLogger perfLogger = SessionState.getPerfLogger();
 
       final HepProgramBuilder program = new HepProgramBuilder();
       // Remove Projects between Joins so that JoinToMultiJoinRule can merge them to MultiJoin
@@ -2236,13 +2241,16 @@ public class CalcitePlanner extends SemanticAnalyzer {
       generatePartialProgram(program, false, HepMatchOrder.BOTTOM_UP,
           new JoinToMultiJoinRule(HiveJoin.class), new LoptOptimizeJoinRule(HiveRelFactories.HIVE_BUILDER));
 
-      perfLogger.PerfLogBegin(this.getClass().getName(), PerfLogger.OPTIMIZER);
       RelNode calciteOptimizedPlan;
-      try {
-        calciteOptimizedPlan = executeProgram(basePlan, program.build(), mdProvider, executorProvider);
+      try (PerfTimer compileTimer = SessionState.getPerfTimer(
+          CalcitePlanner.class, PerfTimedAction.OPTIMIZER,
+          "Calcite: Join Reordering")) {
+        calciteOptimizedPlan = executeProgram(basePlan, program.build(),
+            mdProvider, executorProvider);
       } catch (Exception e) {
         if (noColsMissingStats.get() > 0) {
-          LOG.warn("Missing column stats (see previous messages), skipping join reordering in CBO");
+          LOG.warn(
+              "Missing column stats (see previous messages), skipping join reordering in CBO");
           noColsMissingStats.set(0);
           calciteOptimizedPlan = basePlan;
           disableSemJoinReordering = false;
@@ -2250,8 +2258,6 @@ public class CalcitePlanner extends SemanticAnalyzer {
           throw e;
         }
       }
-      perfLogger.PerfLogEnd(this.getClass().getName(), PerfLogger.OPTIMIZER, "Calcite: Join Reordering");
-
       return calciteOptimizedPlan;
     }
 
@@ -2267,7 +2273,6 @@ public class CalcitePlanner extends SemanticAnalyzer {
      * @return
      */
     private RelNode applyPostJoinOrderingTransform(RelNode basePlan, RelMetadataProvider mdProvider, RexExecutor executorProvider) {
-      PerfLogger perfLogger = SessionState.getPerfLogger();
 
       final HepProgramBuilder program = new HepProgramBuilder();
 
@@ -2373,11 +2378,12 @@ public class CalcitePlanner extends SemanticAnalyzer {
       }
 
       // Trigger program
-      perfLogger.PerfLogBegin(this.getClass().getName(), PerfLogger.OPTIMIZER);
-      basePlan = executeProgram(basePlan, program.build(), mdProvider, executorProvider);
-      perfLogger.PerfLogEnd(this.getClass().getName(), PerfLogger.OPTIMIZER,
-          "Calcite: Postjoin ordering transformation");
-
+      try (PerfTimer compileTimer = SessionState.getPerfTimer(
+          CalcitePlanner.class, PerfTimedAction.OPTIMIZER,
+          "Calcite: Postjoin ordering transformation")) {
+        basePlan = executeProgram(basePlan, program.build(), mdProvider,
+            executorProvider);
+      }
       return basePlan;
     }
 

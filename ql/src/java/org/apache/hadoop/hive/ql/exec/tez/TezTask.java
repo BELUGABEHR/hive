@@ -47,6 +47,8 @@ import org.apache.hadoop.hive.ql.exec.Task;
 import org.apache.hadoop.hive.ql.exec.Utilities;
 import org.apache.hadoop.hive.ql.exec.tez.monitoring.TezJobMonitor;
 import org.apache.hadoop.hive.ql.log.PerfLogger;
+import org.apache.hadoop.hive.ql.log.PerfTimer;
+import org.apache.hadoop.hive.ql.log.PerfTimedAction;
 import org.apache.hadoop.hive.ql.metadata.HiveException;
 import org.apache.hadoop.hive.ql.plan.BaseWork;
 import org.apache.hadoop.hive.ql.plan.MapWork;
@@ -98,8 +100,7 @@ import com.google.common.annotations.VisibleForTesting;
 @SuppressWarnings({"serial"})
 public class TezTask extends Task<TezWork> {
 
-  private static final String CLASS_NAME = TezTask.class.getName();
-  private static transient Logger LOG = LoggerFactory.getLogger(CLASS_NAME);
+  private static Logger LOG = LoggerFactory.getLogger(TezTask.class);
   private final PerfLogger perfLogger = SessionState.getPerfLogger();
   private static final String TEZ_MEMORY_RESERVE_FRACTION = "tez.task.scale.memory.reserve-fraction";
 
@@ -186,10 +187,10 @@ public class TezTask extends Task<TezWork> {
       CallerContext callerContext = CallerContext.create(
           "HIVE", queryPlan.getQueryId(), "HIVE_QUERY_ID", queryPlan.getQueryStr());
 
-      perfLogger.PerfLogBegin(CLASS_NAME, PerfLogger.TEZ_GET_SESSION);
+      perfLogger.PerfLogBegin(TezTask.class.getName(), PerfLogger.TEZ_GET_SESSION);
       session = sessionRef.value = WorkloadManagerFederation.getSession(
           sessionRef.value, conf, mi, getWork().getLlapMode(), wmContext);
-      perfLogger.PerfLogEnd(CLASS_NAME, PerfLogger.TEZ_GET_SESSION);
+      perfLogger.PerfLogEnd(TezTask.class.getName(), PerfLogger.TEZ_GET_SESSION);
 
       try {
         ss.setTezSession(session);
@@ -389,112 +390,120 @@ public class TezTask extends Task<TezWork> {
   DAG build(JobConf conf, TezWork work, Path scratchDir, Context ctx,
       Map<String, LocalResource> vertexResources) throws Exception {
 
-    perfLogger.PerfLogBegin(CLASS_NAME, PerfLogger.TEZ_BUILD_DAG);
+    try (PerfTimer buildDagTimer = SessionState.getPerfTimer(TezTask.class,
+        PerfTimedAction.TEZ_BUILD_DAG)) {
 
-    // getAllWork returns a topologically sorted list, which we use to make
-    // sure that vertices are created before they are used in edges.
-    List<BaseWork> ws = work.getAllWork();
-    Collections.reverse(ws);
+      // getAllWork returns a topologically sorted list, which we use to make
+      // sure that vertices are created before they are used in edges.
+      List<BaseWork> ws = work.getAllWork();
+      Collections.reverse(ws);
 
-    FileSystem fs = scratchDir.getFileSystem(conf);
+      FileSystem fs = scratchDir.getFileSystem(conf);
 
-    // the name of the dag is what is displayed in the AM/Job UI
-    String dagName = utils.createDagName(conf, queryPlan);
+      // the name of the dag is what is displayed in the AM/Job UI
+      String dagName = utils.createDagName(conf, queryPlan);
 
-    LOG.info("Dag name: " + dagName);
-    DAG dag = DAG.create(dagName);
+      LOG.info("Dag name: {}", dagName);
+      DAG dag = DAG.create(dagName);
 
-    // set some info for the query
-    JSONObject json = new JSONObject(new LinkedHashMap<>()).put("context", "Hive")
-        .put("description", ctx.getCmd());
-    String dagInfo = json.toString();
+      // set some info for the query
+      JSONObject json = new JSONObject(new LinkedHashMap<>())
+          .put("context", "Hive").put("description", ctx.getCmd());
+      String dagInfo = json.toString();
 
-    if (LOG.isDebugEnabled()) {
-      LOG.debug("DagInfo: " + dagInfo);
-    }
-    dag.setDAGInfo(dagInfo);
+      LOG.debug("DagInfo: {}", dagInfo);
 
-    dag.setCredentials(conf.getCredentials());
-    setAccessControlsForCurrentUser(dag, queryPlan.getQueryId(), conf);
+      dag.setDAGInfo(dagInfo);
 
-    for (BaseWork w: ws) {
-      boolean isFinal = work.getLeaves().contains(w);
+      dag.setCredentials(conf.getCredentials());
+      setAccessControlsForCurrentUser(dag, queryPlan.getQueryId(), conf);
 
-      // translate work to vertex
-      perfLogger.PerfLogBegin(CLASS_NAME, PerfLogger.TEZ_CREATE_VERTEX + w.getName());
+      for (BaseWork w : ws) {
+        boolean isFinal = work.getLeaves().contains(w);
 
-      if (w instanceof UnionWork) {
-        // Special case for unions. These items translate to VertexGroups
+        // translate work to vertex
+        try (PerfTimer vertexTimer = SessionState.getPerfTimer(TezTask.class,
+            PerfTimedAction.TEZ_CREATE_VERTEX, w.getName())) {
 
-        List<BaseWork> unionWorkItems = new LinkedList<BaseWork>();
-        List<BaseWork> children = new LinkedList<BaseWork>();
+          if (w instanceof UnionWork) {
+            // Special case for unions. These items translate to VertexGroups
 
-        // split the children into vertices that make up the union and vertices that are
-        // proper children of the union
-        for (BaseWork v: work.getChildren(w)) {
-          EdgeType type = work.getEdgeProperty(w, v).getEdgeType();
-          if (type == EdgeType.CONTAINS) {
-            unionWorkItems.add(v);
+            List<BaseWork> unionWorkItems = new LinkedList<BaseWork>();
+            List<BaseWork> children = new LinkedList<BaseWork>();
+
+            // split the children into vertices that make up the union and
+            // vertices that are proper children of the union
+            for (BaseWork v : work.getChildren(w)) {
+              EdgeType type = work.getEdgeProperty(w, v).getEdgeType();
+              if (type == EdgeType.CONTAINS) {
+                unionWorkItems.add(v);
+              } else {
+                children.add(v);
+              }
+            }
+            JobConf parentConf = workToConf.get(unionWorkItems.get(0));
+            checkOutputSpec(w, parentConf);
+
+            // create VertexGroup
+            Vertex[] vertexArray = new Vertex[unionWorkItems.size()];
+
+            int i = 0;
+            for (BaseWork v : unionWorkItems) {
+              vertexArray[i++] = workToVertex.get(v);
+            }
+            VertexGroup group = dag.createVertexGroup(w.getName(), vertexArray);
+
+            // For a vertex group, all Outputs use the same Key-class, Val-class
+            // and partitioner.
+            // Pick any one source vertex to figure out the Edge configuration.
+
+            // now hook up the children
+            for (BaseWork v : children) {
+              // finally we can create the grouped edge
+              GroupInputEdge e = utils.createEdge(group, parentConf,
+                  workToVertex.get(v), work.getEdgeProperty(w, v), v, work);
+
+              dag.addEdge(e);
+            }
           } else {
-            children.add(v);
+            // Regular vertices
+            JobConf wxConf = utils.initializeVertexConf(conf, ctx, w);
+            checkOutputSpec(w, wxConf);
+            Vertex wx = utils.createVertex(wxConf, w, scratchDir, fs, ctx,
+                !isFinal, work, work.getVertexType(w), vertexResources);
+            if (w.getReservedMemoryMB() > 0) {
+              // If reversedMemoryMB is set, make memory allocation fraction
+              // adjustment as needed
+              double frac = DagUtils.adjustMemoryReserveFraction(
+                  w.getReservedMemoryMB(), super.conf);
+              LOG.info(
+                  "Setting " + TEZ_MEMORY_RESERVE_FRACTION + " to " + frac);
+              wx.setConf(TEZ_MEMORY_RESERVE_FRACTION, Double.toString(frac));
+            } // Otherwise just leave it up to Tez to decide how much memory to
+              // allocate
+            dag.addVertex(wx);
+            utils.addCredentials(w, dag);
+
+            workToVertex.put(w, wx);
+            workToConf.put(w, wxConf);
+
+            // add all dependencies (i.e.: edges) to the graph
+            for (BaseWork v : work.getChildren(w)) {
+              assert workToVertex.containsKey(v);
+              Edge e = null;
+
+              TezEdgeProperty edgeProp = work.getEdgeProperty(w, v);
+              e = utils.createEdge(wxConf, wx, workToVertex.get(v), edgeProp, v,
+                  work);
+              dag.addEdge(e);
+            }
           }
         }
-        JobConf parentConf = workToConf.get(unionWorkItems.get(0));
-        checkOutputSpec(w, parentConf);
-
-        // create VertexGroup
-        Vertex[] vertexArray = new Vertex[unionWorkItems.size()];
-
-        int i = 0;
-        for (BaseWork v: unionWorkItems) {
-          vertexArray[i++] = workToVertex.get(v);
-        }
-        VertexGroup group = dag.createVertexGroup(w.getName(), vertexArray);
-
-        // For a vertex group, all Outputs use the same Key-class, Val-class and partitioner.
-        // Pick any one source vertex to figure out the Edge configuration.
-
-        // now hook up the children
-        for (BaseWork v: children) {
-          // finally we can create the grouped edge
-          GroupInputEdge e = utils.createEdge(group, parentConf,
-               workToVertex.get(v), work.getEdgeProperty(w, v), v, work);
-
-          dag.addEdge(e);
-        }
-      } else {
-        // Regular vertices
-        JobConf wxConf = utils.initializeVertexConf(conf, ctx, w);
-        checkOutputSpec(w, wxConf);
-        Vertex wx = utils.createVertex(wxConf, w, scratchDir, fs, ctx, !isFinal,
-            work, work.getVertexType(w), vertexResources);
-        if (w.getReservedMemoryMB() > 0) {
-          // If reversedMemoryMB is set, make memory allocation fraction adjustment as needed
-          double frac = DagUtils.adjustMemoryReserveFraction(w.getReservedMemoryMB(), super.conf);
-          LOG.info("Setting " + TEZ_MEMORY_RESERVE_FRACTION + " to " + frac);
-          wx.setConf(TEZ_MEMORY_RESERVE_FRACTION, Double.toString(frac));
-        } // Otherwise just leave it up to Tez to decide how much memory to allocate
-        dag.addVertex(wx);
-        utils.addCredentials(w, dag);
-        perfLogger.PerfLogEnd(CLASS_NAME, PerfLogger.TEZ_CREATE_VERTEX + w.getName());
-        workToVertex.put(w, wx);
-        workToConf.put(w, wxConf);
-
-        // add all dependencies (i.e.: edges) to the graph
-        for (BaseWork v: work.getChildren(w)) {
-          assert workToVertex.containsKey(v);
-          Edge e = null;
-
-          TezEdgeProperty edgeProp = work.getEdgeProperty(w, v);
-          e = utils.createEdge(wxConf, wx, workToVertex.get(v), edgeProp, v, work);
-          dag.addEdge(e);
-        }
       }
+      // Clear the work map after build. TODO: remove caching instead?
+      Utilities.clearWorkMap(conf);
+      return dag;
     }
-    // Clear the work map after build. TODO: remove caching instead?
-    Utilities.clearWorkMap(conf);
-    perfLogger.PerfLogEnd(CLASS_NAME, PerfLogger.TEZ_BUILD_DAG);
-    return dag;
   }
 
   private static void setAccessControlsForCurrentUser(DAG dag, String queryId,
@@ -535,7 +544,7 @@ public class TezTask extends Task<TezWork> {
   }
 
   DAGClient submit(DAG dag, Ref<TezSessionState> sessionStateRef) throws Exception {
-    perfLogger.PerfLogBegin(CLASS_NAME, PerfLogger.TEZ_SUBMIT_DAG);
+    perfLogger.PerfLogBegin(TezTask.class.getName(), PerfLogger.TEZ_SUBMIT_DAG);
     DAGClient dagClient = null;
     TezSessionState sessionState = sessionStateRef.value;
     try {
@@ -565,7 +574,7 @@ public class TezTask extends Task<TezWork> {
       }
     }
 
-    perfLogger.PerfLogEnd(CLASS_NAME, PerfLogger.TEZ_SUBMIT_DAG);
+    perfLogger.PerfLogEnd(TezTask.class.getName(), PerfLogger.TEZ_SUBMIT_DAG);
     return new SyncDagClient(dagClient);
   }
 

@@ -32,7 +32,8 @@ import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hive.ql.CompilationOpContext;
 import org.apache.hadoop.hive.ql.exec.persistence.MapJoinPersistableTableContainer;
 import org.apache.hadoop.hive.ql.exec.persistence.MapJoinTableContainerSerDe;
-import org.apache.hadoop.hive.ql.log.PerfLogger;
+import org.apache.hadoop.hive.ql.log.PerfTimedAction;
+import org.apache.hadoop.hive.ql.log.PerfTimer;
 import org.apache.hadoop.hive.ql.metadata.HiveException;
 import org.apache.hadoop.hive.ql.plan.BucketMapJoinContext;
 import org.apache.hadoop.hive.ql.plan.MapredLocalWork;
@@ -47,9 +48,7 @@ import org.slf4j.LoggerFactory;
 public class SparkHashTableSinkOperator
     extends TerminalOperator<SparkHashTableSinkDesc> implements Serializable {
   private static final long serialVersionUID = 1L;
-  private final String CLASS_NAME = this.getClass().getName();
-  private final transient PerfLogger perfLogger = SessionState.getPerfLogger();
-  protected static final Logger LOG = LoggerFactory.getLogger(SparkHashTableSinkOperator.class.getName());
+  protected static final Logger LOG = LoggerFactory.getLogger(SparkHashTableSinkOperator.class);
   private static final String MAPRED_FILE_REPLICATION = "mapreduce.client.submit.file.replication";
   private static final int DEFAULT_REPLICATION = 10;
 
@@ -95,16 +94,12 @@ public class SparkHashTableSinkOperator
           || mapJoinTables[tag] == null) {
         LOG.debug("mapJoinTable is null");
       } else if (abort) {
-        if (LOG.isDebugEnabled()) {
-          LOG.debug("Aborting, skip dumping side-table for tag: " + tag);
-        }
+        LOG.debug("Aborting, skip dumping side-table for tag: {}", tag);
       } else {
-        String method = PerfLogger.SPARK_FLUSH_HASHTABLE + getName();
-        perfLogger.PerfLogBegin(CLASS_NAME, method);
-        try {
+        try (PerfTimer compileTimer =
+            SessionState.getPerfTimer(SparkHashTableSinkOperator.class,
+                PerfTimedAction.SPARK_FLUSH_HASHTABLE)) {
           flushToFile(mapJoinTables[tag], tag);
-        } finally {
-          perfLogger.PerfLogEnd(CLASS_NAME, method);
         }
       }
       super.closeOp(abort);

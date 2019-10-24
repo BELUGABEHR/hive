@@ -19,7 +19,6 @@ package org.apache.hadoop.hive.ql.exec.tez;
 
 import java.io.IOException;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Iterator;
 import java.util.List;
 
@@ -34,12 +33,8 @@ import org.apache.hadoop.hive.ql.exec.vector.VectorDeserializeRow;
 import org.apache.hadoop.hive.ql.exec.vector.VectorizedBatchUtil;
 import org.apache.hadoop.hive.ql.exec.vector.VectorizedRowBatch;
 import org.apache.hadoop.hive.ql.exec.vector.VectorizedRowBatchCtx;
-import org.apache.hadoop.hive.ql.exec.vector.expressions.VectorExpressionWriter;
-import org.apache.hadoop.hive.ql.exec.vector.expressions.VectorExpressionWriterFactory;
-import org.apache.hadoop.hive.ql.log.PerfLogger;
 import org.apache.hadoop.hive.ql.metadata.HiveException;
 import org.apache.hadoop.hive.ql.plan.TableDesc;
-import org.apache.hadoop.hive.ql.session.SessionState;
 import org.apache.hadoop.hive.serde2.Deserializer;
 import org.apache.hadoop.hive.serde2.AbstractSerDe;
 import org.apache.hadoop.hive.serde2.SerDeException;
@@ -113,8 +108,6 @@ public class ReduceRecordSource implements RecordSource {
   private boolean handleGroupKey;
 
   private ObjectInspector valueObjectInspector;
-
-  private final PerfLogger perfLogger = SessionState.getPerfLogger();
 
   private Iterable<Object> valueWritables;
 
@@ -234,7 +227,6 @@ public class ReduceRecordSource implements RecordSource {
         throw new RuntimeException("Reduce operator initialization failed", e);
       }
     }
-    perfLogger.PerfLogEnd(CLASS_NAME, PerfLogger.TEZ_INIT_OPERATORS);
   }
 
   @Override

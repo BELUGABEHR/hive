@@ -18,7 +18,8 @@
 
 package org.apache.hadoop.hive.ql.optimizer;
 
-import org.apache.hadoop.hive.ql.log.PerfLogger;
+import org.apache.hadoop.hive.ql.log.PerfTimedAction;
+import org.apache.hadoop.hive.ql.log.PerfTimer;
 import org.apache.hadoop.hive.ql.parse.ParseContext;
 import org.apache.hadoop.hive.ql.parse.SemanticException;
 import org.apache.hadoop.hive.ql.session.SessionState;
@@ -30,27 +31,25 @@ import org.apache.hadoop.hive.ql.session.SessionState;
  * perform all the optimizations, and then return the updated parse context.
  */
 public abstract class Transform {
+
+  private PerfTimer perfTimer;
+
   /**
    * All transformation steps implement this interface.
-   * 
-   * @param pctx
-   *          input parse context
+   *
+   * @param pctx input parse context
    * @return ParseContext
    * @throws SemanticException
    */
-  public abstract ParseContext transform(ParseContext pctx) throws SemanticException;
-  
+  public abstract ParseContext transform(ParseContext pctx)
+      throws SemanticException;
+
   public void beginPerfLogging() {
-    PerfLogger perfLogger = SessionState.getPerfLogger();
-    perfLogger.PerfLogBegin(this.getClass().getName(), PerfLogger.OPTIMIZER);
+    this.perfTimer =
+        SessionState.getPerfTimer(this.getClass(), PerfTimedAction.OPTIMIZER);
   }
 
   public void endPerfLogging() {
-    PerfLogger perfLogger = SessionState.getPerfLogger();
-    perfLogger.PerfLogEnd(this.getClass().getName(), PerfLogger.OPTIMIZER);
+    this.perfTimer.close();
   }
-  public void endPerfLogging(String additionalInfo) {
-    PerfLogger perfLogger = SessionState.getPerfLogger();
-	perfLogger.PerfLogEnd(this.getClass().getName(), PerfLogger.OPTIMIZER, additionalInfo);
-  }  
 }
