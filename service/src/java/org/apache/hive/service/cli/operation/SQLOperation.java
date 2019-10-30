@@ -29,6 +29,7 @@ import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Properties;
 import java.util.concurrent.Future;
 import java.util.concurrent.RejectedExecutionException;
@@ -123,9 +124,10 @@ public class SQLOperation extends ExecuteStatementOperation {
     queryInfo = new QueryInfo(getState().toString(), getParentSession().getUserName(),
             getExecutionEngine(), getHandle().getHandleIdentifier().toString());
 
-    Metrics metrics = MetricsFactory.getInstance();
-    if (metrics != null) {
-      submittedQryScp = metrics.createScope(MetricsConstant.HS2_SUBMITTED_QURIES);
+    final Optional<Metrics> metrics = MetricsFactory.getInstance();
+    if (metrics.isPresent()) {
+      submittedQryScp =
+          metrics.get().createScope(MetricsConstant.HS2_SUBMITTED_QURIES);
     }
   }
 
@@ -615,23 +617,23 @@ public class SQLOperation extends ExecuteStatementOperation {
         MetricsConstant.SQL_OPERATION_PREFIX,
         MetricsConstant.COMPLETED_SQL_OPERATION_PREFIX, state);
 
-    Metrics metrics = MetricsFactory.getInstance();
-    if (metrics != null) {
+    final Optional<Metrics> metrics = MetricsFactory.getInstance();
+    if (metrics.isPresent()) {
       // New state is changed to running from something else (user is active)
       if (state == OperationState.RUNNING && prevState != state) {
-        incrementUserQueries(metrics);
+        incrementUserQueries(metrics.get());
       }
       // New state is not running (user not active) any more
       if (prevState == OperationState.RUNNING && prevState != state) {
-        decrementUserQueries(metrics);
+        decrementUserQueries(metrics.get());
       }
     }
 
     if (state == OperationState.FINISHED || state == OperationState.CANCELED || state == OperationState.ERROR) {
       //update runtime
       queryInfo.setRuntime(getOperationComplete() - getOperationStart());
-      if (metrics != null && submittedQryScp != null) {
-        metrics.endScope(submittedQryScp);
+      if (metrics.isPresent() && submittedQryScp != null) {
+        metrics.get().endScope(submittedQryScp);
       }
     }
 
@@ -642,11 +644,17 @@ public class SQLOperation extends ExecuteStatementOperation {
       queryInfo.updateState(state.toString());
     }
 
-    if (state == OperationState.ERROR) {
-      markQueryMetric(MetricsFactory.getInstance(), MetricsConstant.HS2_FAILED_QUERIES);
-    }
-    if (state == OperationState.FINISHED) {
-      markQueryMetric(MetricsFactory.getInstance(), MetricsConstant.HS2_SUCCEEDED_QUERIES);
+    if (metrics.isPresent()) {
+      switch (state) {
+      case ERROR:
+        metrics.get().markMeter(MetricsConstant.HS2_FAILED_QUERIES);
+        break;
+      case FINISHED:
+        metrics.get().markMeter(MetricsConstant.HS2_SUCCEEDED_QUERIES);
+        break;
+      default:
+        break;
+      }
     }
   }
 
@@ -679,12 +687,6 @@ public class SQLOperation extends ExecuteStatementOperation {
           userQueries.remove(username);
         }
       }
-    }
-  }
-
-  private void markQueryMetric(Metrics metric, String name) {
-    if(metric != null) {
-      metric.markMeter(name);
     }
   }
 

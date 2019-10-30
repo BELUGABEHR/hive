@@ -55,12 +55,12 @@ public class TestSQLOperationMetrics {
     operation = new SQLOperation(session, "select * from dummy",
         Maps.<String, String>newHashMap(), false, 0L);
 
-    metrics = (CodahaleMetrics) MetricsFactory.getInstance();
+    metrics = (CodahaleMetrics) MetricsFactory.getInstance().get();
   }
 
   @After
   public void tearDown() throws Exception {
-    MetricsFactory.getInstance().close();
+    MetricsFactory.getInstance().get().close();
   }
 
   @Test

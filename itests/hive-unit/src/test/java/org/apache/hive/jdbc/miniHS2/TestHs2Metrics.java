@@ -100,7 +100,8 @@ public class TestHs2Metrics {
     serviceClient.executeStatement(sessHandle, "CREATE TABLE " + tableName + " (id INT)", confOverlay);
 
     //check that all calls were recorded.
-    CodahaleMetrics metrics = (CodahaleMetrics) MetricsFactory.getInstance();
+    CodahaleMetrics metrics =
+        (CodahaleMetrics) MetricsFactory.getInstance().get();
     String json = metrics.dumpJson();
     MetricsTestUtils.verifyMetricsJson(json, MetricsTestUtils.TIMER, "api_hs2_operation_INITIALIZED", 1);
     MetricsTestUtils.verifyMetricsJson(json, MetricsTestUtils.TIMER, "api_hs2_operation_PENDING", 1);
@@ -134,7 +135,8 @@ public class TestHs2Metrics {
     Assert.assertNotNull("Expected semantic exception", expectedException);
 
     //verify all scopes were recorded
-    CodahaleMetrics metrics = (CodahaleMetrics) MetricsFactory.getInstance();
+    CodahaleMetrics metrics =
+        (CodahaleMetrics) MetricsFactory.getInstance().get();
     String json = metrics.dumpJson();
     MetricsTestUtils.verifyMetricsJson(json, MetricsTestUtils.TIMER, "api_parse", 1);
     MetricsTestUtils.verifyMetricsJson(json, MetricsTestUtils.TIMER, "api_semanticAnalyze", 1);

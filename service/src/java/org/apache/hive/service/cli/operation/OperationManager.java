@@ -27,6 +27,7 @@ import java.util.LinkedHashMap;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -241,10 +242,10 @@ public class OperationManager extends AbstractService {
     Operation operation = handleToOperation.get(operationHandle);
     if (operation != null && operation.isTimedOut(System.currentTimeMillis())) {
       LOG.info("Operation is timed out,operation=" + operation.getHandle() + ",state=" + operation.getState().toString());
-      Metrics metrics = MetricsFactory.getInstance();
-      if (metrics != null) {
+      final Optional<Metrics> metrics = MetricsFactory.getInstance();
+      if (metrics.isPresent()) {
         try {
-          metrics.decrementCounter(MetricsConstant.OPEN_OPERATIONS);
+          metrics.get().decrementCounter(MetricsConstant.OPEN_OPERATIONS);
         } catch (Exception e) {
           LOG.warn("Error decrementing open_operations metric, reported values may be incorrect", e);
         }
@@ -310,10 +311,10 @@ public class OperationManager extends AbstractService {
   public void closeOperation(OperationHandle opHandle) throws HiveSQLException {
     LOG.info("Closing operation: " + opHandle);
     Operation operation = removeOperation(opHandle);
-    Metrics metrics = MetricsFactory.getInstance();
-    if (metrics != null) {
+    final Optional<Metrics> metrics = MetricsFactory.getInstance();
+    if (metrics.isPresent()) {
       try {
-        metrics.decrementCounter(MetricsConstant.OPEN_OPERATIONS);
+        metrics.get().decrementCounter(MetricsConstant.OPEN_OPERATIONS);
       } catch (Exception e) {
         LOG.warn("Error Reporting close operation to Metrics system", e);
       }

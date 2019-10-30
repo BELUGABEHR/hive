@@ -30,6 +30,7 @@ import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
@@ -397,9 +398,9 @@ public final class QueryResultsCache {
       try {
         instance = new QueryResultsCache(conf);
 
-        Metrics metrics = MetricsFactory.getInstance();
-        if (metrics != null) {
-          registerMetrics(metrics, instance);
+        final Optional<Metrics> metrics = MetricsFactory.getInstance();
+        if (metrics.isPresent()) {
+          registerMetrics(metrics.get(), instance);
         }
       } catch (Exception err) {
         inited.set(false);
@@ -908,16 +909,16 @@ public final class QueryResultsCache {
   }
 
   public static void incrementMetric(String name, long count) {
-    Metrics metrics = MetricsFactory.getInstance();
-    if (metrics != null) {
-      metrics.incrementCounter(name, count);
+    final Optional<Metrics> metrics = MetricsFactory.getInstance();
+    if (metrics.isPresent()) {
+      metrics.get().incrementCounter(name, count);
     }
   }
 
   public static void decrementMetric(String name, long count) {
-    Metrics metrics = MetricsFactory.getInstance();
-    if (metrics != null) {
-      metrics.decrementCounter(name, count);
+    final Optional<Metrics> metrics = MetricsFactory.getInstance();
+    if (metrics.isPresent()) {
+      metrics.get().decrementCounter(name, count);
     }
   }
 

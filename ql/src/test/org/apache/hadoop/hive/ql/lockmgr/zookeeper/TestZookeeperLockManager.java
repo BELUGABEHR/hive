@@ -133,7 +133,7 @@ public class TestZookeeperLockManager {
     conf.setBoolVar(HiveConf.ConfVars.HIVE_SUPPORT_CONCURRENCY, false);
     conf.setVar(HiveConf.ConfVars.HIVE_METRICS_REPORTER, MetricsReporting.JSON_FILE.name() + "," + MetricsReporting.JMX.name());
     MetricsFactory.init(conf);
-    CodahaleMetrics metrics = (CodahaleMetrics) MetricsFactory.getInstance();
+    CodahaleMetrics metrics = (CodahaleMetrics) MetricsFactory.getInstance().get();
 
     HiveLockManagerCtx ctx = new HiveLockManagerCtx(conf);
     ZooKeeperHiveLockManager zMgr= new ZooKeeperHiveLockManager();

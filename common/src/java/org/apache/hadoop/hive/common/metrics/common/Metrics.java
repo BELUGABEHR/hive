@@ -60,7 +60,7 @@ public interface Metrics {
    * @param name
    * @return
    */
-  public Long incrementCounter(String name);
+  public void incrementCounter(String name);
 
   /**
    * Increments a counter of the given name by "increment"
@@ -68,7 +68,7 @@ public interface Metrics {
    * @param increment
    * @return
    */
-  public Long incrementCounter(String name, long increment);
+  public void incrementCounter(String name, long increment);
 
 
   /**
@@ -76,7 +76,7 @@ public interface Metrics {
    * @param name
    * @return
    */
-  public Long decrementCounter(String name);
+  public void decrementCounter(String name);
 
   /**
    * Decrements a counter of the given name by "decrement"
@@ -84,7 +84,7 @@ public interface Metrics {
    * @param decrement
    * @return
    */
-  public Long decrementCounter(String name, long decrement);
+  public void decrementCounter(String name, long decrement);
 
 
   /**

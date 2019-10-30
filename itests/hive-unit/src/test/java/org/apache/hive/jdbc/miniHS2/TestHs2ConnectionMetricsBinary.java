@@ -52,7 +52,8 @@ public class TestHs2ConnectionMetricsBinary extends Hs2ConnectionMetrics {
   @Test
   public void testOpenConnectionMetrics() throws Exception {
 
-    CodahaleMetrics metrics = (CodahaleMetrics) MetricsFactory.getInstance();
+    CodahaleMetrics metrics =
+        (CodahaleMetrics) MetricsFactory.getInstance().get();
     String[] beelineArgs = {
         "-u", miniHS2.getBaseJdbcURL() + "default",
         "-n", USERNAME,

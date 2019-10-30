@@ -38,6 +38,7 @@ import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
 
@@ -157,10 +158,10 @@ public final class DbLockManager implements HiveLockManager{
       }
       acquiredLocks.add(hl);
 
-      Metrics metrics = MetricsFactory.getInstance();
-      if (metrics != null) {
+      final Optional<Metrics> metrics = MetricsFactory.getInstance();
+      if (metrics.isPresent()) {
         try {
-          metrics.incrementCounter(MetricsConstant.METASTORE_HIVE_LOCKS);
+          metrics.get().incrementCounter(MetricsConstant.METASTORE_HIVE_LOCKS);
         } catch (Exception e) {
           LOG.warn("Error Reporting hive client metastore lock operation to Metrics system", e);
         }
@@ -218,10 +219,10 @@ public final class DbLockManager implements HiveLockManager{
       txnManager.getMS().unlock(lockId);
       //important to remove after unlock() in case it fails
       removed = locks.remove(hiveLock);
-      Metrics metrics = MetricsFactory.getInstance();
-      if (metrics != null) {
+      final Optional<Metrics> metrics = MetricsFactory.getInstance();
+      if (metrics.isPresent()) {
         try {
-          metrics.decrementCounter(MetricsConstant.METASTORE_HIVE_LOCKS);
+          metrics.get().decrementCounter(MetricsConstant.METASTORE_HIVE_LOCKS);
         } catch (Exception e) {
           LOG.warn("Error Reporting hive client metastore unlock operation to Metrics system", e);
         }

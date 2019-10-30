@@ -19,6 +19,7 @@
 package org.apache.hive.service.cli.thrift;
 
 import java.util.Arrays;
+import java.util.Optional;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.SynchronousQueue;
 import java.util.concurrent.TimeUnit;
@@ -199,11 +200,12 @@ public class ThriftHttpCLIService extends ThriftCLIService {
   }
 
   private void openConnection() {
-    Metrics metrics = MetricsFactory.getInstance();
-    if (metrics != null) {
+    final Optional<Metrics> metrics = MetricsFactory.getInstance();
+    if (metrics.isPresent()) {
       try {
-        metrics.incrementCounter(MetricsConstant.OPEN_CONNECTIONS);
-        metrics.incrementCounter(MetricsConstant.CUMULATIVE_CONNECTION_COUNT);
+        metrics.get().incrementCounter(MetricsConstant.OPEN_CONNECTIONS);
+        metrics.get()
+            .incrementCounter(MetricsConstant.CUMULATIVE_CONNECTION_COUNT);
       } catch (Exception e) {
         LOG.warn("Error reporting HS2 open connection operation to Metrics system", e);
       }
@@ -211,10 +213,10 @@ public class ThriftHttpCLIService extends ThriftCLIService {
   }
 
   private void closeConnection() {
-    Metrics metrics = MetricsFactory.getInstance();
-    if (metrics != null) {
+    final Optional<Metrics> metrics = MetricsFactory.getInstance();
+    if (metrics.isPresent()) {
       try {
-        metrics.decrementCounter(MetricsConstant.OPEN_CONNECTIONS);
+        metrics.get().decrementCounter(MetricsConstant.OPEN_CONNECTIONS);
       } catch (Exception e) {
         LOG.warn("Error reporting HS2 close connection operation to Metrics system", e);
       }

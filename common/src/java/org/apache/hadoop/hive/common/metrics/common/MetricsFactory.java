@@ -17,46 +17,44 @@
  */
 package org.apache.hadoop.hive.common.metrics.common;
 
-import org.apache.hadoop.hive.conf.HiveConf;
-import org.apache.hadoop.util.ReflectionUtils;
-
 import java.lang.reflect.Constructor;
+import java.util.Optional;
+import java.util.concurrent.atomic.AtomicReference;
+
+import org.apache.hadoop.hive.conf.HiveConf;
 
 /**
  * Class that manages a static Metric instance for this process.
  */
 public class MetricsFactory {
 
-  //Volatile ensures that static access returns Metrics instance in fully-initialized state.
-  //Alternative is to synchronize static access, which has performance penalties.
-  private volatile static Metrics metrics;
+  private static AtomicReference<Metrics> metrics = new AtomicReference<>();
 
   /**
    * Initializes static Metrics instance.
    */
   public synchronized static void init(HiveConf conf) throws Exception {
-    if (metrics == null) {
-      Class metricsClass = conf.getClassByName(
-        conf.getVar(HiveConf.ConfVars.HIVE_METRICS_CLASS));
-      Constructor constructor = metricsClass.getConstructor(HiveConf.class);
-      metrics = (Metrics) constructor.newInstance(conf);
+    if (metrics.get() == null) {
+      Class<?> metricsClass = conf
+          .getClassByName(conf.getVar(HiveConf.ConfVars.HIVE_METRICS_CLASS));
+      Constructor<?> constructor = metricsClass.getConstructor(HiveConf.class);
+      metrics.set((Metrics) constructor.newInstance(conf));
     }
   }
 
   /**
    * Returns static Metrics instance, null if not initialized or closed.
    */
-  public static Metrics getInstance() {
-    return metrics;
+  public static Optional<Metrics> getInstance() {
+    return Optional.ofNullable(metrics.get());
   }
 
   /**
    * Closes and removes static Metrics instance.
    */
   public synchronized static void close() throws Exception {
-    if (metrics != null) {
-      metrics.close();
-      metrics = null;
+    if (metrics.get() != null) {
+      metrics.getAndSet(null).close();
     }
   }
 }

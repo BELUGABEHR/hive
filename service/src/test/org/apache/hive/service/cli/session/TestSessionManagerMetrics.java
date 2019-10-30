@@ -82,7 +82,7 @@ public class TestSessionManagerMetrics {
     sm = new SessionManager(null, true);
     sm.init(conf);
 
-    metrics = (CodahaleMetrics) MetricsFactory.getInstance();
+    metrics = (CodahaleMetrics) MetricsFactory.getInstance().get();
 
     Hive doNothingHive = mock(Hive.class);
     Hive.set(doNothingHive);

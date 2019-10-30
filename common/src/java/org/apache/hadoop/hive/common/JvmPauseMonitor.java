@@ -36,6 +36,7 @@ import java.lang.management.GarbageCollectorMXBean;
 import java.lang.management.ManagementFactory;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
 
@@ -202,11 +203,11 @@ public class JvmPauseMonitor {
       }
     }
 
-    private void incrementMetricsCounter(String name, long count) {
-      Metrics metrics = MetricsFactory.getInstance();
-      if (metrics != null) {
+    private void incrementMetricsCounter(final String name, final long count) {
+      final Optional<Metrics> metrics = MetricsFactory.getInstance();
+      if (metrics.isPresent()) {
         try {
-          metrics.incrementCounter(name, count);
+          metrics.get().incrementCounter(name, count);
         } catch (Exception e) {
           LOG.warn("Error Reporting JvmPauseMonitor to Metrics system", e);
         }

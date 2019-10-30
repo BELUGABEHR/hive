@@ -355,7 +355,7 @@ public class TestCompileLock {
   }
 
   private Counter getCounter(String counter) {
-    CodahaleMetrics metrics = (CodahaleMetrics) MetricsFactory.getInstance();
+    CodahaleMetrics metrics = (CodahaleMetrics) MetricsFactory.getInstance().get();
     SortedMap<String, Counter> counters = metrics.getMetricRegistry().getCounters();
 
     assertNotNull(counters);

@@ -20,12 +20,15 @@ package org.apache.hadoop.hive.common.metrics.metrics2;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.lang.reflect.InvocationTargetException;
+import java.nio.file.Files;
+import java.nio.file.Paths;
+
 import org.apache.hadoop.fs.CommonConfigurationKeysPublic;
-import org.apache.hadoop.hive.common.metrics.MetricsTestUtils;
 import org.apache.hadoop.hive.common.metrics.common.MetricsFactory;
 import org.apache.hadoop.hive.conf.HiveConf;
 import org.junit.After;
 import org.junit.Assert;
+import org.junit.Before;
 import org.junit.Test;
 
 import java.io.File;
@@ -35,8 +38,14 @@ import java.io.File;
  */
 public class TestCodahaleReportersConf {
 
-  private static File workDir = new File(System.getProperty("test.tmp.dir"));
-  private static File jsonReportFile;
+  private final File workDir = new File(System.getProperty("test.tmp.dir"));
+  private File jsonReportFile;
+
+  @Before
+  public void setup() {
+    jsonReportFile = new File(workDir, "json_reporting");
+    jsonReportFile.delete();
+  }
 
   @After
   public void after() throws Exception {
@@ -51,9 +60,6 @@ public class TestCodahaleReportersConf {
 
     HiveConf conf = new HiveConf();
 
-    jsonReportFile = new File(workDir, "json_reporting");
-    jsonReportFile.delete();
-
     conf.set(CommonConfigurationKeysPublic.FS_DEFAULT_NAME_KEY, "local");
     conf.setVar(HiveConf.ConfVars.HIVE_METRICS_CLASS, CodahaleMetrics.class.getCanonicalName());
     conf.setVar(HiveConf.ConfVars.HIVE_METRICS_REPORTER, "JMX, JSON");
@@ -64,11 +70,14 @@ public class TestCodahaleReportersConf {
 
     int runs = 5;
     for (int i = 0; i < runs; i++) {
-      MetricsFactory.getInstance().incrementCounter("count2");
+      MetricsFactory.getInstance().get().incrementCounter("count2");
     }
 
+    MetricsFactory.getInstance().get().close();
+
     // we expect json file to be updated
-    byte[] jsonData = MetricsTestUtils.getFileData(jsonReportFile.getAbsolutePath(), 2000, 3);
+    byte[] jsonData =
+        Files.readAllBytes(Paths.get(jsonReportFile.getAbsolutePath()));
     ObjectMapper objectMapper = new ObjectMapper();
 
     JsonNode rootNode = objectMapper.readTree(jsonData);
@@ -90,9 +99,6 @@ public class TestCodahaleReportersConf {
 
     HiveConf conf = new HiveConf();
 
-    jsonReportFile = new File(workDir, "json_reporting");
-    jsonReportFile.delete();
-
     conf.set(CommonConfigurationKeysPublic.FS_DEFAULT_NAME_KEY, "local");
     conf.setVar(HiveConf.ConfVars.HIVE_METRICS_CLASS, CodahaleMetrics.class.getCanonicalName());
     conf.setVar(HiveConf.ConfVars.HIVE_METRICS_REPORTER, "JMX, JSON");
@@ -105,7 +111,7 @@ public class TestCodahaleReportersConf {
 
     int runs = 5;
     for (int i = 0; i < runs; i++) {
-      MetricsFactory.getInstance().incrementCounter("count2");
+      MetricsFactory.getInstance().get().incrementCounter("count2");
     }
 
     Assert.assertFalse(jsonReportFile.exists());
@@ -123,9 +129,6 @@ public class TestCodahaleReportersConf {
 
     HiveConf conf = new HiveConf();
 
-    jsonReportFile = new File(workDir, "json_reporting");
-    jsonReportFile.delete();
-
     conf.set(CommonConfigurationKeysPublic.FS_DEFAULT_NAME_KEY, "local");
     conf.setVar(HiveConf.ConfVars.HIVE_METRICS_CLASS, CodahaleMetrics.class.getCanonicalName());
     conf.setVar(HiveConf.ConfVars.HIVE_METRICS_REPORTER, "JMX, JSON");
@@ -136,8 +139,10 @@ public class TestCodahaleReportersConf {
 
     try {
       MetricsFactory.init(conf);
-    } catch (InvocationTargetException expectedException) {
-
+    } catch (InvocationTargetException e) {
+      Assert.fail();
+    } finally {
+      MetricsFactory.getInstance().get().close();
     }
 
     Assert.assertFalse(jsonReportFile.exists());

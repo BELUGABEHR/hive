@@ -23,13 +23,13 @@ import com.codahale.metrics.json.MetricsModule;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.ObjectWriter;
+import com.google.common.util.concurrent.MoreExecutors;
 import com.google.common.util.concurrent.ThreadFactoryBuilder;
 import org.apache.hadoop.hive.conf.HiveConf;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.BufferedWriter;
-import java.io.FileWriter;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -39,6 +39,7 @@ import java.nio.file.attribute.FileAttribute;
 import java.nio.file.attribute.PosixFilePermission;
 import java.nio.file.attribute.PosixFilePermissions;
 import java.util.Set;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -121,15 +122,26 @@ public class JsonFileMetricsReporter implements CodahaleReporter, Runnable {
       }
     }
 
-    executorService = Executors.newScheduledThreadPool(1,
-        new ThreadFactoryBuilder().setNameFormat(JSON_REPORTER_THREAD_NAME).build());
-    executorService.scheduleWithFixedDelay(this,0, interval, TimeUnit.MILLISECONDS);
+    executorService =
+        Executors.newSingleThreadScheduledExecutor(new ThreadFactoryBuilder()
+            .setNameFormat(JSON_REPORTER_THREAD_NAME).build());
+    executorService.scheduleWithFixedDelay(this, 0, interval,
+        TimeUnit.MILLISECONDS);
   }
 
+  /**
+   * Waits up to 60 seconds for internal  {@link ExecutorService} to close. Causes a new JSON file to 
+   */
   @Override
   public void close() {
     if (executorService != null) {
-      executorService.shutdown();
+      MoreExecutors.shutdownAndAwaitTermination(executorService, 60L,
+          TimeUnit.SECONDS);
+      if (executorService.isTerminated()) {
+        // Dump on close in case a file has not been written in a while
+        run();
+      }
+      executorService = null;
     }
   }
 
@@ -137,15 +149,6 @@ public class JsonFileMetricsReporter implements CodahaleReporter, Runnable {
   public void run() {
     Path tmpFile = null;
     try {
-      // Dump metrics to string as JSON
-      String json = null;
-      try {
-        json = jsonWriter.writeValueAsString(metricRegistry);
-      } catch (JsonProcessingException e) {
-        LOGGER.error("Unable to convert json to string ", e);
-        return;
-      }
-
       // Metrics are first dumped to a temp file which is then renamed to the destination
       try {
         tmpFile = Files.createTempFile(metricsDir, "hmetrics", "json", FILE_ATTRS);
@@ -163,10 +166,15 @@ public class JsonFileMetricsReporter implements CodahaleReporter, Runnable {
       }
 
       // Write json to the temp file.
-      try (BufferedWriter bw = new BufferedWriter(new FileWriter(tmpFile.toFile()))) {
+      try (BufferedWriter bw = Files.newBufferedWriter(tmpFile)) {
+        final String json = jsonWriter.writeValueAsString(metricRegistry);
+        LOGGER.trace("JSON metrics: {}", json);
         bw.write(json);
+      } catch (JsonProcessingException e) {
+        LOGGER.error("Unable to convert json to string ", e);
+        return;
       } catch (IOException e) {
-        LOGGER.error("Unable to write to temp file " + tmpFile, e);
+        LOGGER.error("Unable to write to temp file: {}", tmpFile, e);
         return;
       }
 
@@ -174,12 +182,11 @@ public class JsonFileMetricsReporter implements CodahaleReporter, Runnable {
       try {
         Files.move(tmpFile, path, StandardCopyOption.ATOMIC_MOVE);
       } catch (Exception e) {
-        LOGGER.error("Unable to rename temp file {} to {}", tmpFile, path);
-        LOGGER.error("Exception during rename", e);
+        LOGGER.error("Unable to rename temp file {} to {}", tmpFile, path, e);
       }
     } catch (Throwable t) {
-      // catch all errors (throwable and execptions to prevent subsequent tasks from being suppressed)
-      LOGGER.error("Error executing scheduled task ", t);
+      // catch all errors (throwable and exceptions to prevent subsequent tasks from being suppressed)
+      LOGGER.error("Error executing scheduled task", t);
     } finally {
       // If something happened and we were not able to rename the temp file, attempt to remove it
       if (tmpFile != null && tmpFile.toFile().exists()) {
@@ -187,7 +194,7 @@ public class JsonFileMetricsReporter implements CodahaleReporter, Runnable {
         try {
           Files.delete(tmpFile);
         } catch (Exception e) {
-          LOGGER.error("failed to delete temporary metrics file " +  tmpFile, e);
+          LOGGER.error("failed to delete temporary metrics file {}", tmpFile, e);
         }
       }
     }

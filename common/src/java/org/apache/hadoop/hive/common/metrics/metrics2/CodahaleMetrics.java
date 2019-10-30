@@ -18,11 +18,9 @@
 
 package org.apache.hadoop.hive.common.metrics.metrics2;
 
-import com.codahale.metrics.ConsoleReporter;
 import com.codahale.metrics.Counter;
 import com.codahale.metrics.ExponentiallyDecayingReservoir;
 import com.codahale.metrics.Gauge;
-import com.codahale.metrics.JmxReporter;
 import com.codahale.metrics.Meter;
 import com.codahale.metrics.Metric;
 import com.codahale.metrics.MetricRegistry;
@@ -35,45 +33,28 @@ import com.codahale.metrics.jvm.GarbageCollectorMetricSet;
 import com.codahale.metrics.jvm.MemoryUsageGaugeSet;
 import com.codahale.metrics.jvm.ThreadStatesGaugeSet;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.github.joshelser.dropwizard.metrics.hadoop.HadoopMetrics2Reporter;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Preconditions;
 import com.google.common.base.Splitter;
-import com.google.common.cache.CacheBuilder;
-import com.google.common.cache.CacheLoader;
-import com.google.common.cache.LoadingCache;
-import com.google.common.collect.Lists;
 
 import java.lang.reflect.Constructor;
 import java.lang.reflect.InvocationTargetException;
-import org.apache.hadoop.fs.FileSystem;
-import org.apache.hadoop.fs.Path;
-import org.apache.hadoop.fs.permission.FsPermission;
 import org.apache.hadoop.hive.common.metrics.common.MetricsConstant;
 import org.apache.hadoop.hive.common.metrics.common.MetricsScope;
 import org.apache.hadoop.hive.common.metrics.common.MetricsVariable;
 import org.apache.hadoop.hive.conf.HiveConf;
-import org.apache.hadoop.metrics2.lib.DefaultMetricsSystem;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.io.BufferedWriter;
 import java.io.Closeable;
-import java.io.IOException;
-import java.io.OutputStreamWriter;
 import java.lang.management.ManagementFactory;
-import java.net.URI;
 import java.util.HashMap;
 import java.util.HashSet;
-import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.TimerTask;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.locks.Lock;
-import java.util.concurrent.locks.ReentrantLock;
 
 /**
  * Codahale-backed Metrics implementation.
@@ -83,26 +64,22 @@ public class CodahaleMetrics implements org.apache.hadoop.hive.common.metrics.co
   public static final Logger LOGGER = LoggerFactory.getLogger(CodahaleMetrics.class);
 
   public final MetricRegistry metricRegistry = new MetricRegistry();
-  private final Lock timersLock = new ReentrantLock();
-  private final Lock countersLock = new ReentrantLock();
-  private final Lock gaugesLock = new ReentrantLock();
-  private final Lock metersLock = new ReentrantLock();
 
-  private LoadingCache<String, Timer> timers;
-  private LoadingCache<String, Counter> counters;
-  private LoadingCache<String, Meter> meters;
-  private ConcurrentHashMap<String, Gauge> gauges;
+  private ConcurrentMap<String, Timer> timers;
+  private ConcurrentMap<String, Counter> counters;
+  private ConcurrentMap<String, Meter> meters;
+  private ConcurrentMap<String, Gauge<?>> gauges;
 
   private HiveConf conf;
-  private final Set<Closeable> reporters = new HashSet<Closeable>();
+  private final Set<Closeable> reporters = new HashSet<>();
 
-  private final ThreadLocal<HashMap<String, CodahaleMetricsScope>> threadLocalScopes
-    = new ThreadLocal<HashMap<String, CodahaleMetricsScope>>() {
-    @Override
-    protected HashMap<String, CodahaleMetricsScope> initialValue() {
-      return new HashMap<String, CodahaleMetricsScope>();
-    }
-  };
+  private final ThreadLocal<HashMap<String, CodahaleMetricsScope>> threadLocalScopes =
+      new ThreadLocal<HashMap<String, CodahaleMetricsScope>>() {
+        @Override
+        protected HashMap<String, CodahaleMetricsScope> initialValue() {
+          return new HashMap<>();
+        }
+      };
 
   public class CodahaleMetricsScope implements MetricsScope {
 
@@ -152,38 +129,11 @@ public class CodahaleMetrics implements org.apache.hadoop.hive.common.metrics.co
 
   public CodahaleMetrics(HiveConf conf) {
     this.conf = conf;
-    //Codahale artifacts are lazily-created.
-    timers = CacheBuilder.newBuilder().build(
-      new CacheLoader<String, com.codahale.metrics.Timer>() {
-        @Override
-        public com.codahale.metrics.Timer load(String key) {
-          Timer timer = new Timer(new ExponentiallyDecayingReservoir());
-          metricRegistry.register(key, timer);
-          return timer;
-        }
-      }
-    );
-    counters = CacheBuilder.newBuilder().build(
-      new CacheLoader<String, Counter>() {
-        @Override
-        public Counter load(String key) {
-          Counter counter = new Counter();
-          metricRegistry.register(key, counter);
-          return counter;
-        }
-      }
-    );
-    meters = CacheBuilder.newBuilder().build(
-        new CacheLoader<String, Meter>() {
-          @Override
-          public Meter load(String key) {
-            Meter meter = new Meter();
-            metricRegistry.register(key, meter);
-            return meter;
-          }
-        }
-    );
-    gauges = new ConcurrentHashMap<String, Gauge>();
+
+    timers = new ConcurrentHashMap<>();
+    counters = new ConcurrentHashMap<>();
+    meters = new ConcurrentHashMap<>();
+    gauges = new ConcurrentHashMap<>();
 
     //register JVM metrics
     registerAll("gc", new GarbageCollectorMetricSet());
@@ -199,17 +149,19 @@ public class CodahaleMetrics implements org.apache.hadoop.hive.common.metrics.co
 
   @Override
   public void close() throws Exception {
-    if (reporters != null) {
-      for (Closeable reporter : reporters) {
+    for (Closeable reporter : reporters) {
+      try {
         reporter.close();
+      } catch (Exception e) {
+        LOGGER.warn("Error while closing reporter {}", reporter, e);
       }
     }
     for (Map.Entry<String, Metric> metric : metricRegistry.getMetrics().entrySet()) {
       metricRegistry.remove(metric.getKey());
     }
-    timers.invalidateAll();
-    counters.invalidateAll();
-    meters.invalidateAll();
+    timers.clear();
+    counters.clear();
+    meters.clear();
   }
 
   @Override
@@ -246,46 +198,35 @@ public class CodahaleMetrics implements org.apache.hadoop.hive.common.metrics.co
   }
 
   @Override
-  public Long incrementCounter(String name) {
-    return incrementCounter(name, 1L);
+  public void incrementCounter(String name) {
+    incrementCounter(name, 1L);
   }
 
   @Override
-  public Long incrementCounter(String name, long increment) {
-    String key = name;
-    try {
-      countersLock.lock();
-      counters.get(key).inc(increment);
-      return counters.get(key).getCount();
-    } catch(ExecutionException ee) {
-      throw new IllegalStateException("Error retrieving counter from the metric registry ", ee);
-    } finally {
-      countersLock.unlock();
+  public void incrementCounter(final String name, final long increment) {
+    counters.computeIfAbsent(name, key -> {
+      Counter counter = new Counter();
+      metricRegistry.register(key, counter);
+      return counter;
+    }).inc(increment);
+  }
+
+  @Override
+  public void decrementCounter(String name) {
+    decrementCounter(name, 1L);
+  }
+
+  @Override
+  public void decrementCounter(final String name, final long decrement) {
+    final Counter counter = counters.get(name);
+    if (counter != null) {
+      counter.dec(decrement);
     }
   }
 
   @Override
-  public Long decrementCounter(String name) {
-    return decrementCounter(name, 1L);
-  }
-
-  @Override
-  public Long decrementCounter(String name, long decrement) {
-    String key = name;
-    try {
-      countersLock.lock();
-      counters.get(key).dec(decrement);
-      return counters.get(key).getCount();
-    } catch(ExecutionException ee) {
-      throw new IllegalStateException("Error retrieving counter from the metric registry ", ee);
-    } finally {
-      countersLock.unlock();
-    }
-  }
-
-  @Override
-  public void addGauge(String name, final MetricsVariable variable) {
-    Gauge gauge = new Gauge() {
+  public void addGauge(String name, final MetricsVariable<?> variable) {
+    Gauge<?> gauge = new Gauge<Object>() {
       @Override
       public Object getValue() {
         return variable.getValue();
@@ -294,24 +235,18 @@ public class CodahaleMetrics implements org.apache.hadoop.hive.common.metrics.co
     addGaugeInternal(name, gauge);
   }
 
-
   @Override
-  public void removeGauge(String name) {
-    try {
-      gaugesLock.lock();
-      gauges.remove(name);
-      // Metrics throws an Exception if we don't do this when the key already exists
-      if (metricRegistry.getGauges().containsKey(name)) {
-        metricRegistry.remove(name);
-      }
-    } finally {
-      gaugesLock.unlock();
-    }
+  public void removeGauge(final String name) {
+    gauges.computeIfPresent(name, (key, value) -> {
+      final boolean removed = metricRegistry.remove(name);
+      LOGGER.debug("Gauge [{}] removed from registry: {}", key, removed);
+      return null;
+    });
   }
 
   @Override
   public void addRatio(String name, MetricsVariable<Integer> numerator,
-                           MetricsVariable<Integer> denominator) {
+      MetricsVariable<Integer> denominator) {
     Preconditions.checkArgument(numerator != null, "Numerator must not be null");
     Preconditions.checkArgument(denominator != null, "Denominator must not be null");
 
@@ -319,50 +254,33 @@ public class CodahaleMetrics implements org.apache.hadoop.hive.common.metrics.co
     addGaugeInternal(name, gauge);
   }
 
-  private void addGaugeInternal(String name, Gauge gauge) {
-    try {
-      gaugesLock.lock();
-      gauges.put(name, gauge);
-      // Metrics throws an Exception if we don't do this when the key already exists
-      if (metricRegistry.getGauges().containsKey(name)) {
-        LOGGER.warn("A Gauge with name [" + name + "] already exists. "
-            + " The old gauge will be overwritten, but this is not recommended");
-        metricRegistry.remove(name);
+  private void addGaugeInternal(final String name, final Gauge<?> gauge) {
+    gauges.compute(name, (key, value) -> {
+      final boolean removed = metricRegistry.remove(name);
+      if (removed) {
+        LOGGER.warn("A Gauge with name [{}] already exists. "
+            + " The old gauge will be overwritten, but this is not recommended", key);
       }
       metricRegistry.register(name, gauge);
-    } finally {
-      gaugesLock.unlock();
-    }
+      return value;
+    });
   }
 
   @Override
-  public void markMeter(String name) {
-    String key = name;
-    try {
-      metersLock.lock();
-      Meter meter = meters.get(name);
-      meter.mark();
-    } catch (ExecutionException e) {
-      throw new IllegalStateException("Error retrieving meter " + name
-          + " from the metric registry ", e);
-    } finally {
-      metersLock.unlock();
-    }
+  public void markMeter(final String name) {
+    meters.computeIfAbsent(name, key -> {
+      Meter meter = new Meter();
+      metricRegistry.register(key, meter);
+      return meter;
+    }).mark();
   }
 
-  // This method is necessary to synchronize lazy-creation to the timers.
-  private Timer getTimer(String name) {
-    String key = name;
-    try {
-      timersLock.lock();
-      Timer timer = timers.get(key);
+  private Timer getTimer(final String name) {
+    return timers.computeIfAbsent(name, key -> {
+      Timer timer = new Timer(new ExponentiallyDecayingReservoir());
+      metricRegistry.register(key, timer);
       return timer;
-    } catch (ExecutionException e) {
-      throw new IllegalStateException("Error retrieving timer " + name
-          + " from the metric registry ", e);
-    } finally {
-      timersLock.unlock();
-    }
+    });
   }
 
   private void registerAll(String prefix, MetricSet metricSet) {
@@ -388,16 +306,23 @@ public class CodahaleMetrics implements org.apache.hadoop.hive.common.metrics.co
   }
 
   /**
-   * Initializes reporters from HIVE_CODAHALE_METRICS_REPORTER_CLASSES or HIVE_METRICS_REPORTER if the former is not defined.
-   * Note: if both confs are defined, only  HIVE_CODAHALE_METRICS_REPORTER_CLASSES will be used.
+   * Initializes reporters from HIVE_CODAHALE_METRICS_REPORTER_CLASSES or
+   * HIVE_METRICS_REPORTER if the former is not defined. Note: if both confs are
+   * defined, only HIVE_CODAHALE_METRICS_REPORTER_CLASSES will be used.
    */
   private void initReporting() {
-
-    if (!(initCodahaleMetricsReporterClasses() || initMetricsReporter())) {
-      LOGGER.warn("Unable to initialize metrics reporting");
+    try {
+      initCodahaleMetricsReporterClasses();
+    } catch (Exception e1) {
+      LOGGER.warn("Could not initiate Codahale Metrics Reporter Classes", e1);
+      try {
+        initMetricsReporter();
+      } catch (Exception e2) {
+        LOGGER.warn("Unable to initialize metrics reporting", e2);
+      }
     }
     if (reporters.isEmpty()) {
-      // log a warning incase no reporters were successfully added
+      // log a warning in case no reporters were successfully added
       LOGGER.warn("No reporters configured for codahale metrics!");
     }
   }
@@ -406,59 +331,60 @@ public class CodahaleMetrics implements org.apache.hadoop.hive.common.metrics.co
    * Initializes reporting using HIVE_CODAHALE_METRICS_REPORTER_CLASSES.
    * @return whether initialization was successful or not
    */
-  private boolean initCodahaleMetricsReporterClasses() {
-
-    List<String> reporterClasses = Lists.newArrayList(Splitter.on(",").trimResults().
-        omitEmptyStrings().split(conf.getVar(HiveConf.ConfVars.HIVE_CODAHALE_METRICS_REPORTER_CLASSES)));
-    if (reporterClasses.isEmpty()) {
-      return false;
-    }
+  private void initCodahaleMetricsReporterClasses() {
+    final String reporterClassesConf =
+        conf.getVar(HiveConf.ConfVars.HIVE_CODAHALE_METRICS_REPORTER_CLASSES);
+    final Iterable<String> reporterClasses = Splitter.on(",").trimResults()
+        .omitEmptyStrings().split(reporterClassesConf);
 
     for (String reporterClass : reporterClasses) {
-      Class name = null;
+      Class<?> name = null;
       try {
         name = conf.getClassByName(reporterClass);
       } catch (ClassNotFoundException e) {
-        LOGGER.error("Unable to instantiate metrics reporter class " + reporterClass +
-            " from conf HIVE_CODAHALE_METRICS_REPORTER_CLASSES", e);
-        throw new IllegalArgumentException(e);
+        throw new IllegalArgumentException(
+            "Unable to instantiate metrics reporter class " + reporterClass
+                + " from conf HIVE_CODAHALE_METRICS_REPORTER_CLASSES",
+            e);
       }
       try {
-        // Note: Hadoop metric reporter does not support tags. We create a single reporter for all metrics.
-        Constructor constructor = name.getConstructor(MetricRegistry.class, HiveConf.class);
-        CodahaleReporter reporter = (CodahaleReporter) constructor.newInstance(metricRegistry, conf);
+        // Note: Hadoop metric reporter does not support tags. We create a
+        // single reporter for all metrics.
+        Constructor<?> constructor =
+            name.getConstructor(MetricRegistry.class, HiveConf.class);
+        CodahaleReporter reporter =
+            (CodahaleReporter) constructor.newInstance(metricRegistry, conf);
         reporter.start();
         reporters.add(reporter);
-      } catch (NoSuchMethodException | InstantiationException |
-          IllegalAccessException | InvocationTargetException e) {
-        LOGGER.error("Unable to instantiate using constructor(MetricRegistry, HiveConf) for"
-            + " reporter " + reporterClass + " from conf HIVE_CODAHALE_METRICS_REPORTER_CLASSES",
+      } catch (NoSuchMethodException | InstantiationException
+          | IllegalAccessException | InvocationTargetException e) {
+        throw new IllegalArgumentException(
+            "Unable to instantiate using constructor(MetricRegistry, HiveConf)"
+                + " for reporter " + reporterClass
+                + " from conf HIVE_CODAHALE_METRICS_REPORTER_CLASSES",
             e);
-        throw new IllegalArgumentException(e);
       }
     }
-    return true;
   }
 
   /**
    * Initializes reporting using HIVE_METRICS+REPORTER.
    * @return whether initialization was successful or not
    */
-  private boolean initMetricsReporter() {
+  private void initMetricsReporter() {
 
-    List<String> metricsReporterNames = Lists.newArrayList(Splitter.on(",").trimResults().
-        omitEmptyStrings().split(conf.getVar(HiveConf.ConfVars.HIVE_METRICS_REPORTER)));
-    if (metricsReporterNames.isEmpty()) {
-      return false;
-    }
+    Iterable<String> metricsReporterNames =
+        Splitter.on(",").trimResults().omitEmptyStrings()
+            .split(conf.getVar(HiveConf.ConfVars.HIVE_METRICS_REPORTER));
 
-    MetricsReporting reporter = null;
     for (String metricsReportingName : metricsReporterNames) {
+      MetricsReporting reporter = null;
       try {
-        reporter = MetricsReporting.valueOf(metricsReportingName.trim().toUpperCase());
+        reporter =
+            MetricsReporting.valueOf(metricsReportingName.trim().toUpperCase());
       } catch (IllegalArgumentException e) {
-        LOGGER.error("Invalid reporter name " + metricsReportingName, e);
-        throw e;
+        throw new RuntimeException(
+            "Invalid reporter name " + metricsReportingName, e);
       }
       CodahaleReporter codahaleReporter = null;
       switch (reporter) {
@@ -476,12 +402,10 @@ public class CodahaleMetrics implements org.apache.hadoop.hive.common.metrics.co
         break;
       default:
         LOGGER.warn("Unhandled reporter " + reporter + " provided.");
+        continue;
       }
-      if (codahaleReporter != null) {
-        codahaleReporter.start();
-        reporters.add(codahaleReporter);
-      }
+      codahaleReporter.start();
+      reporters.add(codahaleReporter);
     }
-    return true;
   }
 }

@@ -23,6 +23,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 import org.apache.hadoop.hive.common.metrics.common.Metrics;
 import org.apache.hadoop.hive.common.metrics.common.MetricsFactory;
@@ -97,8 +98,11 @@ public class WmPoolMetrics implements MetricsSource {
     }
 
     // Set up codahale if enabled; we cannot tag the values so just prefix them for the JMX view.
-    Metrics chMetrics = MetricsFactory.getInstance();
-    if (!(chMetrics instanceof CodahaleMetrics)) return;
+    final Optional<Metrics> chMetrics = MetricsFactory.getInstance();
+    if (chMetrics.isPresent()
+        && !(chMetrics.get() instanceof CodahaleMetrics)) {
+      return;
+    }
 
     List<String> codahaleNames = new ArrayList<>();
     for (Map.Entry<String, MutableMetric> e : allMetrics.entrySet()) {
@@ -112,7 +116,7 @@ public class WmPoolMetrics implements MetricsSource {
       if (var == null) continue; // Unexpected metric type.
       String name = "WM_" + poolName + "_" + e.getKey();
       codahaleNames.add(name);
-      chMetrics.addGauge(name, var);
+      chMetrics.get().addGauge(name, var);
     }
     this.codahaleGaugeNames = codahaleNames;
   }
@@ -177,9 +181,11 @@ public class WmPoolMetrics implements MetricsSource {
     ms.unregisterSource(sourceName);
     ms = null;
     if (codahaleGaugeNames != null) {
-      Metrics metrics = MetricsFactory.getInstance();
-      for (String chgName : codahaleGaugeNames) {
-        metrics.removeGauge(chgName);
+      final Optional<Metrics> metrics = MetricsFactory.getInstance();
+      if (metrics.isPresent()) {
+        for (String chgName : codahaleGaugeNames) {
+          metrics.get().removeGauge(chgName);
+        }
       }
       codahaleGaugeNames = null;
     }

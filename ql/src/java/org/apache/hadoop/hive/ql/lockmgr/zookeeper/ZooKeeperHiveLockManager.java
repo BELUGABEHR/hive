@@ -45,6 +45,7 @@ import java.util.HashSet;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Queue;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
@@ -449,23 +450,28 @@ public class ZooKeeperHiveLockManager implements HiveLockManager {
         return null;
       }
     }
-    Metrics metrics = MetricsFactory.getInstance();
-    if (metrics != null) {
+    final Optional<Metrics> metrics = MetricsFactory.getInstance();
+    if (metrics.isPresent()) {
       try {
-        switch(mode) {
+        switch (mode) {
         case EXCLUSIVE:
-          metrics.incrementCounter(MetricsConstant.ZOOKEEPER_HIVE_EXCLUSIVELOCKS);
+          metrics.get()
+              .incrementCounter(MetricsConstant.ZOOKEEPER_HIVE_EXCLUSIVELOCKS);
           break;
         case SEMI_SHARED:
-          metrics.incrementCounter(MetricsConstant.ZOOKEEPER_HIVE_SEMISHAREDLOCKS);
+          metrics.get()
+              .incrementCounter(MetricsConstant.ZOOKEEPER_HIVE_SEMISHAREDLOCKS);
           break;
         default:
-          metrics.incrementCounter(MetricsConstant.ZOOKEEPER_HIVE_SHAREDLOCKS);
+          metrics.get()
+              .incrementCounter(MetricsConstant.ZOOKEEPER_HIVE_SHAREDLOCKS);
           break;
         }
 
       } catch (Exception e) {
-        LOG.warn("Error Reporting hive client zookeeper lock operation to Metrics system", e);
+        LOG.warn(
+            "Error Reporting hive client zookeeper lock operation to Metrics system",
+            e);
       }
     }
     return new ZooKeeperHiveLock(res, key, mode);
@@ -529,18 +535,21 @@ public class ZooKeeperHiveLockManager implements HiveLockManager {
           curatorFramework.delete().forPath(name);
         }
       }
-      Metrics metrics = MetricsFactory.getInstance();
-      if (metrics != null) {
+      final Optional<Metrics> metrics = MetricsFactory.getInstance();
+      if (metrics.isPresent()) {
         try {
-          switch(lMode) {
+          switch (lMode) {
           case EXCLUSIVE:
-            metrics.decrementCounter(MetricsConstant.ZOOKEEPER_HIVE_EXCLUSIVELOCKS);
+            metrics.get().decrementCounter(
+                MetricsConstant.ZOOKEEPER_HIVE_EXCLUSIVELOCKS);
             break;
           case SEMI_SHARED:
-            metrics.decrementCounter(MetricsConstant.ZOOKEEPER_HIVE_SEMISHAREDLOCKS);
+            metrics.get().decrementCounter(
+                MetricsConstant.ZOOKEEPER_HIVE_SEMISHAREDLOCKS);
             break;
           default:
-            metrics.decrementCounter(MetricsConstant.ZOOKEEPER_HIVE_SHAREDLOCKS);
+            metrics.get()
+                .decrementCounter(MetricsConstant.ZOOKEEPER_HIVE_SHAREDLOCKS);
             break;
           }
         } catch (Exception e) {

@@ -123,11 +123,18 @@ public class LegacyMetrics implements Metrics {
     public void close() {
       if (isOpen) {
         Long endTime = System.currentTimeMillis();
-        synchronized(metrics) {
-          Long num = metrics.incrementCounter(numCounter);
-          Long time = metrics.incrementCounter(timeCounter, endTime - startTime);
-          if (num != null && time != null) {
-            metrics.set(avgTimeCounter, Double.valueOf(time.doubleValue() / num.doubleValue()));
+        synchronized (metrics) {
+          metrics.incrementCounter(numCounter);
+          metrics.incrementCounter(timeCounter, endTime - startTime);
+          try {
+            Long num = (Long) metrics.get(numCounter);
+            Long time = (Long) metrics.get(timeCounter);
+            if (num != null && time != null) {
+              metrics.set(avgTimeCounter,
+                  Double.valueOf(time.doubleValue() / num.doubleValue()));
+            }
+          } catch (JMException e) {
+            LOG.warn("Unable to access metrics counters");
           }
         }
       } else {
@@ -174,11 +181,13 @@ public class LegacyMetrics implements Metrics {
     mbs.registerMBean(metrics, oname);
   }
 
-  public Long incrementCounter(String name) {
-    return incrementCounter(name,Long.valueOf(1));
+  @Override
+  public void incrementCounter(String name) {
+    incrementCounter(name,Long.valueOf(1));
   }
 
-  public Long incrementCounter(String name, long increment) {
+  @Override
+  public void incrementCounter(String name, long increment) {
     Long value = null;
     synchronized(metrics) {
       if (!metrics.hasKey(name)) {
@@ -194,14 +203,14 @@ public class LegacyMetrics implements Metrics {
         }
       }
     }
-    return value;
   }
 
-  public Long decrementCounter(String name) {
-    return decrementCounter(name, Long.valueOf(1));
+  @Override
+  public void decrementCounter(String name) {
+    decrementCounter(name, Long.valueOf(1));
   }
 
-  public Long decrementCounter(String name, long decrement) {
+  public void decrementCounter(String name, long decrement) {
     Long value = null;
     synchronized(metrics) {
       if (!metrics.hasKey(name)) {
@@ -217,7 +226,6 @@ public class LegacyMetrics implements Metrics {
         }
       }
     }
-    return value;
   }
 
   @Override

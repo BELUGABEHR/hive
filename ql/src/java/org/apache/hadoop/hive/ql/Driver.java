@@ -33,6 +33,7 @@ import java.util.LinkedHashSet;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Queue;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -1314,9 +1315,9 @@ public class Driver implements IDriver {
   }
 
   private void compileInternal(String command, boolean deferClose) throws CommandProcessorException {
-    Metrics metrics = MetricsFactory.getInstance();
-    if (metrics != null) {
-      metrics.incrementCounter(MetricsConstant.WAITING_COMPILE_OPS, 1);
+    final Optional<Metrics> metrics = MetricsFactory.getInstance();
+    if (metrics.isPresent()) {
+      metrics.get().incrementCounter(MetricsConstant.WAITING_COMPILE_OPS);
     }
 
     PerfLogger perfLogger = SessionState.getPerfLogger(true);
@@ -1327,8 +1328,8 @@ public class Driver implements IDriver {
 
       perfLogger.PerfLogEnd(CLASS_NAME, PerfLogger.WAIT_COMPILE);
 
-      if (metrics != null) {
-        metrics.decrementCounter(MetricsConstant.WAITING_COMPILE_OPS, 1);
+      if (metrics.isPresent()) {
+        metrics.get().decrementCounter(MetricsConstant.WAITING_COMPILE_OPS);
       }
       if (!success) {
         String errorMessage = ErrorMsg.COMPILE_LOCK_TIMED_OUT.getErrorCodedMsg();
@@ -1671,7 +1672,7 @@ public class Driver implements IDriver {
     } else {
       maxlen = conf.getIntVar(HiveConf.ConfVars.HIVEJOBNAMELENGTH);
     }
-    Metrics metrics = MetricsFactory.getInstance();
+    final Optional<Metrics> metrics = MetricsFactory.getInstance();
 
     String queryId = plan.getQueryId();
     // Get the query string from the conf file as the compileInternal() method might
@@ -1768,8 +1769,8 @@ public class Driver implements IDriver {
         assert tsk.getParentTasks() == null || tsk.getParentTasks().isEmpty();
         driverCxt.addToRunnable(tsk);
 
-        if (metrics != null) {
-          tsk.updateTaskMetrics(metrics);
+        if (metrics.isPresent()) {
+          tsk.updateTaskMetrics(metrics.get());
         }
       }
 

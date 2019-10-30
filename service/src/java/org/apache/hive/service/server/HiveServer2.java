@@ -868,7 +868,7 @@ public class HiveServer2 extends CompositeService {
       }
     }
     // Shutdown Metrics
-    if (MetricsFactory.getInstance() != null) {
+    if (MetricsFactory.getInstance().isPresent()) {
       try {
         MetricsFactory.close();
       } catch (Exception e) {

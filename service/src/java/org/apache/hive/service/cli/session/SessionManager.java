@@ -27,6 +27,7 @@ import java.util.Collections;
 import java.util.Date;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Future;
@@ -115,10 +116,10 @@ public class SessionManager extends CompositeService {
     createBackgroundOperationPool();
     addService(operationManager);
     initSessionImplClassName();
-    Metrics metrics = MetricsFactory.getInstance();
-    if(metrics != null){
-      registerOpenSesssionMetrics(metrics);
-      registerActiveSesssionMetrics(metrics);
+    final Optional<Metrics> metrics = MetricsFactory.getInstance();
+    if (metrics.isPresent()) {
+      registerOpenSesssionMetrics(metrics.get());
+      registerActiveSesssionMetrics(metrics.get());
     }
 
     userLimit = hiveConf.getIntVar(ConfVars.HIVE_SERVER2_LIMIT_CONNECTIONS_PER_USER);
@@ -215,20 +216,22 @@ public class SessionManager extends CompositeService {
     checkOperation = HiveConf.getBoolVar(hiveConf,
         ConfVars.HIVE_SERVER2_IDLE_SESSION_CHECK_OPERATION);
 
-    Metrics m = MetricsFactory.getInstance();
-    if (m != null) {
-      m.addGauge(MetricsConstant.EXEC_ASYNC_QUEUE_SIZE, new MetricsVariable() {
-        @Override
-        public Object getValue() {
-          return queue.size();
-        }
-      });
-      m.addGauge(MetricsConstant.EXEC_ASYNC_POOL_SIZE, new MetricsVariable() {
-        @Override
-        public Object getValue() {
-          return backgroundOperationPool.getPoolSize();
-        }
-      });
+    final Optional<Metrics> metrics = MetricsFactory.getInstance();
+    if (metrics.isPresent()) {
+      metrics.get().addGauge(MetricsConstant.EXEC_ASYNC_QUEUE_SIZE,
+          new MetricsVariable() {
+            @Override
+            public Object getValue() {
+              return queue.size();
+            }
+          });
+      metrics.get().addGauge(MetricsConstant.EXEC_ASYNC_POOL_SIZE,
+          new MetricsVariable() {
+            @Override
+            public Object getValue() {
+              return backgroundOperationPool.getPoolSize();
+            }
+          });
     }
   }
 
@@ -294,9 +297,10 @@ public class SessionManager extends CompositeService {
               } catch (HiveSQLException e) {
                 LOG.warn("Exception is thrown closing session " + handle, e);
               } finally {
-                Metrics metrics = MetricsFactory.getInstance();
-                if (metrics != null) {
-                  metrics.incrementCounter(MetricsConstant.HS2_ABANDONED_SESSIONS);
+                final Optional<Metrics> metrics = MetricsFactory.getInstance();
+                if (metrics.isPresent()) {
+                  metrics.get()
+                      .incrementCounter(MetricsConstant.HS2_ABANDONED_SESSIONS);
                 }
               }
             } else {

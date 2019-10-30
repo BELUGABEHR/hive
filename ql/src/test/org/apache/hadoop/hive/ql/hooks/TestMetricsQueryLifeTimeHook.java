@@ -50,7 +50,8 @@ public class TestMetricsQueryLifeTimeHook {
     conf.setVar(HiveConf.ConfVars.HIVE_METRICS_JSON_FILE_INTERVAL, "100000s");
 
     MetricsFactory.init(conf);
-    metricRegistry = ((CodahaleMetrics) MetricsFactory.getInstance()).getMetricRegistry();
+    metricRegistry = ((CodahaleMetrics) MetricsFactory.getInstance().get())
+        .getMetricRegistry();
 
     hook = new MetricsQueryLifeTimeHook();
     ctx = new QueryLifeTimeHookContextImpl();
@@ -107,7 +108,7 @@ public class TestMetricsQueryLifeTimeHook {
     MetricsFactory.close();
     MetricsQueryLifeTimeHook emptyhook = new MetricsQueryLifeTimeHook();
 
-    assertThat(MetricsFactory.getInstance(), nullValue());
+    assertThat(MetricsFactory.getInstance().get(), nullValue());
 
     emptyhook.beforeCompile(ctx);
     emptyhook.afterCompile(ctx, false);

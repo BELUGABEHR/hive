@@ -49,7 +49,7 @@ public class TestLegacyMetrics {
     HiveConf conf = new HiveConf();
     conf.setVar(HiveConf.ConfVars.HIVE_METRICS_CLASS, LegacyMetrics.class.getCanonicalName());
     MetricsFactory.init(conf);
-    metrics = (LegacyMetrics) MetricsFactory.getInstance();
+    metrics = (LegacyMetrics) MetricsFactory.getInstance().get();
   }
 
   @After

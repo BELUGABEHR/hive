@@ -30,6 +30,7 @@ import org.slf4j.LoggerFactory;
 
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Optional;
 
 /**
  * PerfLogger.
@@ -230,20 +231,21 @@ public class PerfLogger {
   transient Map<String, MetricsScope> openScopes = new HashMap<String, MetricsScope>();
 
   private void beginMetrics(String method) {
-    Metrics metrics = MetricsFactory.getInstance();
-    if (metrics != null) {
-      MetricsScope scope = metrics.createScope(MetricsConstant.API_PREFIX + method);
+    final Optional<Metrics> metrics = MetricsFactory.getInstance();
+    if (metrics.isPresent()) {
+      MetricsScope scope =
+          metrics.get().createScope(MetricsConstant.API_PREFIX + method);
       openScopes.put(method, scope);
     }
 
   }
 
   private void endMetrics(String method) {
-    Metrics metrics = MetricsFactory.getInstance();
-    if (metrics != null) {
-      MetricsScope scope = openScopes.remove(method);
+    final Optional<Metrics> metrics = MetricsFactory.getInstance();
+    if (metrics.isPresent()) {
+      final MetricsScope scope = openScopes.remove(method);
       if (scope != null) {
-        metrics.endScope(scope);
+        metrics.get().endScope(scope);
       }
     }
   }
@@ -252,10 +254,10 @@ public class PerfLogger {
    * Cleans up any dangling perfLog metric call scopes.
    */
   public void cleanupPerfLogMetrics() {
-    Metrics metrics = MetricsFactory.getInstance();
-    if (metrics != null) {
+    final Optional<Metrics> metrics = MetricsFactory.getInstance();
+    if (metrics.isPresent()) {
       for (MetricsScope openScope : openScopes.values()) {
-        metrics.endScope(openScope);
+        metrics.get().endScope(openScope);
       }
     }
     openScopes.clear();

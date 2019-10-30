@@ -21,6 +21,7 @@ import java.io.File;
 import java.util.EnumSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
@@ -261,9 +262,9 @@ public abstract class Operation {
   public void run() throws HiveSQLException {
     beforeRun();
     try {
-      Metrics metrics = MetricsFactory.getInstance();
-      if (metrics != null) {
-        metrics.incrementCounter(MetricsConstant.OPEN_OPERATIONS);
+      final Optional<Metrics> metrics = MetricsFactory.getInstance();
+      if (metrics.isPresent()) {
+        metrics.get().incrementCounter(MetricsConstant.OPEN_OPERATIONS);
       }
       runInternal();
     } finally {
@@ -376,19 +377,21 @@ public abstract class Operation {
     OperationState.UNKNOWN
   );
 
-  protected final MetricsScope updateOperationStateMetrics(MetricsScope stateScope, String operationPrefix,
+  protected final MetricsScope updateOperationStateMetrics(
+      MetricsScope stateScope, String operationPrefix,
       String completedOperationPrefix, OperationState state) {
-    Metrics metrics = MetricsFactory.getInstance();
-    if (metrics != null) {
+    final Optional<Metrics> metrics = MetricsFactory.getInstance();
+    if (metrics.isPresent()) {
       if (stateScope != null) {
-        metrics.endScope(stateScope);
+        metrics.get().endScope(stateScope);
         stateScope = null;
       }
       if (scopeStates.contains(state)) {
-        stateScope = metrics.createScope(MetricsConstant.API_PREFIX + operationPrefix + state);
+        stateScope = metrics.get()
+            .createScope(MetricsConstant.API_PREFIX + operationPrefix + state);
       }
       if (terminalStates.contains(state)) {
-        metrics.incrementCounter(completedOperationPrefix + state);
+        metrics.get().incrementCounter(completedOperationPrefix + state);
       }
     }
     return stateScope;

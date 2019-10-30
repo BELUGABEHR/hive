@@ -41,7 +41,8 @@ public class TestMetricVariableRatioGauge {
     conf.setVar(HiveConf.ConfVars.HIVE_METRICS_JSON_FILE_INTERVAL, "60000m");
 
     MetricsFactory.init(conf);
-    metricRegistry = ((CodahaleMetrics) MetricsFactory.getInstance()).getMetricRegistry();
+    metricRegistry = ((CodahaleMetrics) MetricsFactory.getInstance().get())
+        .getMetricRegistry();
   }
 
   @After
@@ -54,8 +55,9 @@ public class TestMetricVariableRatioGauge {
     NumericVariable num = new NumericVariable(10);
     NumericVariable ord = new NumericVariable(5);
 
-    MetricsFactory.getInstance().addRatio("rat", num, ord);
-    String json = ((CodahaleMetrics) MetricsFactory.getInstance()).dumpJson();
+    MetricsFactory.getInstance().get().addRatio("rat", num, ord);
+    String json =
+        ((CodahaleMetrics) MetricsFactory.getInstance().get()).dumpJson();
     MetricsTestUtils.verifyMetricsJson(json, MetricsTestUtils.GAUGE, "rat", 2d);
   }
 
@@ -64,19 +66,23 @@ public class TestMetricVariableRatioGauge {
     NumericVariable num = new NumericVariable(20);
     NumericVariable ord = new NumericVariable(3);
 
-    MetricsFactory.getInstance().addRatio("rat", num, ord);
-    String json = ((CodahaleMetrics) MetricsFactory.getInstance()).dumpJson();
-    MetricsTestUtils.verifyMetricsJson(json, MetricsTestUtils.GAUGE, "rat", 6.6666d, 1e-4);
+    MetricsFactory.getInstance().get().addRatio("rat", num, ord);
+    String json =
+        ((CodahaleMetrics) MetricsFactory.getInstance().get()).dumpJson();
+    MetricsTestUtils.verifyMetricsJson(json, MetricsTestUtils.GAUGE, "rat",
+        6.6666d, 1e-4);
   }
 
   @Test(expected = IllegalArgumentException.class)
   public void testMissingNumeratorRatio() throws Exception {
-    MetricsFactory.getInstance().addRatio("rat", null, new NumericVariable(5));
+    MetricsFactory.getInstance().get().addRatio("rat", null,
+        new NumericVariable(5));
   }
 
   @Test(expected = IllegalArgumentException.class)
   public void testMissingDenominatorRatio() throws Exception {
-    MetricsFactory.getInstance().addRatio("rat", new NumericVariable(5), null);
+    MetricsFactory.getInstance().get().addRatio("rat", new NumericVariable(5),
+        null);
   }
 
   @Test
@@ -84,9 +90,11 @@ public class TestMetricVariableRatioGauge {
     NumericVariable num = new NumericVariable(null);
     NumericVariable ord = new NumericVariable(null);
 
-    MetricsFactory.getInstance().addRatio("rat", num, ord);
-    String json = ((CodahaleMetrics) MetricsFactory.getInstance()).dumpJson();
-    MetricsTestUtils.verifyMetricsJson(json, MetricsTestUtils.GAUGE, "rat", "NaN");
+    MetricsFactory.getInstance().get().addRatio("rat", num, ord);
+    String json =
+        ((CodahaleMetrics) MetricsFactory.getInstance().get()).dumpJson();
+    MetricsTestUtils.verifyMetricsJson(json, MetricsTestUtils.GAUGE, "rat",
+        "NaN");
   }
 
   @Test
@@ -94,9 +102,11 @@ public class TestMetricVariableRatioGauge {
     NumericVariable num = new NumericVariable(10);
     NumericVariable ord = new NumericVariable(0);
 
-    MetricsFactory.getInstance().addRatio("rat", num, ord);
-    String json = ((CodahaleMetrics) MetricsFactory.getInstance()).dumpJson();
-    MetricsTestUtils.verifyMetricsJson(json, MetricsTestUtils.GAUGE, "rat", "NaN");
+    MetricsFactory.getInstance().get().addRatio("rat", num, ord);
+    String json =
+        ((CodahaleMetrics) MetricsFactory.getInstance().get()).dumpJson();
+    MetricsTestUtils.verifyMetricsJson(json, MetricsTestUtils.GAUGE, "rat",
+        "NaN");
   }
 
   private class NumericVariable implements MetricsVariable<Integer> {

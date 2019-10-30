@@ -61,7 +61,8 @@ public class TestHs2ConnectionMetricsHttp extends Hs2ConnectionMetrics {
 
   @Test
   public void testOpenConnectionMetrics() throws Exception {
-    CodahaleMetrics metrics = (CodahaleMetrics) MetricsFactory.getInstance();
+    CodahaleMetrics metrics =
+        (CodahaleMetrics) MetricsFactory.getInstance().get();
 
     TCLIService.Client httpClient = getHttpClient();
     TOpenSessionReq openSessionReq = new TOpenSessionReq();
