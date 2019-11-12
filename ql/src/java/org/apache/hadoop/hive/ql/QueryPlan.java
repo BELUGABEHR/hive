@@ -643,7 +643,6 @@ public class QueryPlan implements Serializable {
     try {
       return getJSONQuery(getQueryPlan());
     } catch (Exception e) {
-      e.printStackTrace();
       return e.toString();
     }
   }
@@ -655,8 +654,6 @@ public class QueryPlan implements Serializable {
     try {
       q.write(oprot);
     } catch (TException e) {
-      // TODO Auto-generated catch block
-      e.printStackTrace();
       return q.toString();
     }
     return tmb.toString("UTF-8");
@@ -669,8 +666,6 @@ public class QueryPlan implements Serializable {
     try {
       q.write(oprot);
     } catch (TException e) {
-      // TODO Auto-generated catch block
-      e.printStackTrace();
       return q.toString();
     }
     byte[] buf = new byte[tmb.length()];

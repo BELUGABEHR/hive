@@ -419,7 +419,6 @@ public abstract class HiveBaseResultSet implements ResultSet {
       wasNull = evaluated == null;
       return evaluated;
     } catch (Exception e) {
-      e.printStackTrace();
       throw new SQLException("Unrecognized column type:" + columnType, e);
     }
   }

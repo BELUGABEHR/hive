@@ -1834,7 +1834,7 @@ public class RCFile {
         try {
           ret = nextKeyBuffer();
         } catch (EOFException eof) {
-          eof.printStackTrace();
+          LOG.warn("Could not get next key buffer", eof);
         }
       }
       return (ret > 0) && next(readRows);

@@ -841,7 +841,7 @@ public final class Utilities {
         }
       }
     } catch (FileNotFoundException e) {
-      e.printStackTrace();
+      LOG.error("Failed contents equal", e);
     }
     return false;
   }
@@ -1885,7 +1885,8 @@ public final class Utilities {
     try {
       return bucketName.split(COPY_KEYWORD)[0];
     } catch (Exception e) {
-      e.printStackTrace();
+      LOG.warn("Error getting bucked file name, returning provided name: {}",
+          bucketName);
       return bucketName;
     }
   }

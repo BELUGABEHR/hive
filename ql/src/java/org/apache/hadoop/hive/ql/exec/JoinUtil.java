@@ -304,7 +304,6 @@ public class JoinUtil {
     try {
       SerDeUtils.initializeSerDe(sd, null, desc.getProperties(), null);
     } catch (SerDeException e) {
-      e.printStackTrace();
       return null;
     }
     return sd;

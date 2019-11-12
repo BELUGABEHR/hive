@@ -80,7 +80,6 @@ public final class DDLSemanticAnalyzerFactory {
       BaseSemanticAnalyzer analyzer = analyzerClass.getConstructor(QueryState.class).newInstance(queryState);
       return analyzer;
     } catch (Exception e) {
-      e.printStackTrace();
       throw new RuntimeException(e);
     }
   }
@@ -93,7 +92,6 @@ public final class DDLSemanticAnalyzerFactory {
           analyzerClass.getConstructor(QueryState.class, Hive.class).newInstance(queryState, db);
       return analyzer;
     } catch (Exception e) {
-      e.printStackTrace();
       throw new RuntimeException(e);
     }
   }

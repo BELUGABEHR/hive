@@ -1395,7 +1395,6 @@ public class AcidUtils {
       }
       return new ArrayList<HdfsDirSnapshot>(dirToSnapshots.values());
     } catch (IOException e) {
-      e.printStackTrace();
       throw new IOException(e);
     }
   }

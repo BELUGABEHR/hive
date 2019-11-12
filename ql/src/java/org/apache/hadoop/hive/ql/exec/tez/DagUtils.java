@@ -934,7 +934,7 @@ public class DagUtils {
     try {
       fstat = remoteFs.getFileStatus(file);
     } catch (IOException e) {
-      e.printStackTrace();
+      LOG.error("Error. Ignored.", e);
     }
 
     URL resourceURL = ConverterUtils.getYarnUrlFromPath(file);

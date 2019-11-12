@@ -250,7 +250,6 @@ public class ExecDriver extends Task<MapredWork> implements Serializable, Hadoop
       FileSystem fs = emptyScratchDir.getFileSystem(job);
       fs.mkdirs(emptyScratchDir);
     } catch (IOException e) {
-      e.printStackTrace();
       console.printError("Error launching map-reduce job", "\n"
           + org.apache.hadoop.util.StringUtils.stringifyException(e));
       return 5;
@@ -430,7 +429,6 @@ public class ExecDriver extends Task<MapredWork> implements Serializable, Hadoop
       returnVal = jobExecHelper.progress(rj, jc, ctx);
       success = (returnVal == 0);
     } catch (Exception e) {
-      e.printStackTrace();
       setException(e);
       String mesg = " with exception '" + Utilities.getNameMessage(e) + "'";
       if (rj != null) {
