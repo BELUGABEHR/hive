@@ -1885,8 +1885,9 @@ public final class Utilities {
     try {
       return bucketName.split(COPY_KEYWORD)[0];
     } catch (Exception e) {
-      LOG.warn("Error getting bucked file name, returning provided name: {}",
+      LOG.warn("Error getting bucket file name, returning provided name: {}",
           bucketName);
+      LOG.debug("Error getting bucket file name details", e);
       return bucketName;
     }
   }

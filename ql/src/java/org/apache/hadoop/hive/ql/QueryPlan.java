@@ -60,6 +60,8 @@ import org.apache.thrift.TException;
 import org.apache.thrift.protocol.TBinaryProtocol;
 import org.apache.thrift.protocol.TJSONProtocol;
 import org.apache.thrift.transport.TMemoryBuffer;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import com.google.common.annotations.VisibleForTesting;
 
@@ -70,6 +72,8 @@ import com.google.common.annotations.VisibleForTesting;
  */
 public class QueryPlan implements Serializable {
   private static final long serialVersionUID = 1L;
+
+  private static final Logger LOG = LoggerFactory.getLogger(QueryPlan.class);
 
   private String cboInfo;
   private String queryString;
@@ -643,6 +647,7 @@ public class QueryPlan implements Serializable {
     try {
       return getJSONQuery(getQueryPlan());
     } catch (Exception e) {
+      LOG.debug("Error encoding query plan into JSON", e);
       return e.toString();
     }
   }
@@ -654,6 +659,7 @@ public class QueryPlan implements Serializable {
     try {
       q.write(oprot);
     } catch (TException e) {
+      LOG.debug("Error encoding query plan into Thirft JSON", e);
       return q.toString();
     }
     return tmb.toString("UTF-8");
@@ -666,6 +672,7 @@ public class QueryPlan implements Serializable {
     try {
       q.write(oprot);
     } catch (TException e) {
+      LOG.debug("Error encoding query plan into binary string", e);
       return q.toString();
     }
     byte[] buf = new byte[tmb.length()];
