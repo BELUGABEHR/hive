@@ -56,10 +56,12 @@ public class AcidCompactionHistoryService implements MetastoreTaskThread {
     TxnStore.MutexAPI.LockHandle handle = null;
     try {
       handle = txnHandler.getMutexAPI().acquireLock(TxnStore.MUTEX_KEY.CompactionHistory.name());
-      long startTime = System.currentTimeMillis();
+      final long startTime = System.nanoTime();
       txnHandler.purgeCompactionHistory();
-      LOG.debug("History reaper reaper ran for " + (System.currentTimeMillis() - startTime)/1000 +
-          "seconds.");
+      if (LOG.isDebugEnabled()) {
+        final long estimatedTime = System.nanoTime() - startTime;
+        LOG.debug("History reaper reaper ran for {} seconds", TimeUnit.NANOSECONDS.toSeconds(estimatedTime));
+      }
     } catch(Throwable t) {
       LOG.error("Serious error in {}", Thread.currentThread().getName(), ": {}" + t.getMessage(), t);
     } finally {

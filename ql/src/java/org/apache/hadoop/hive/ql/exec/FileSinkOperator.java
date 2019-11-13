@@ -31,6 +31,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Properties;
 import java.util.Set;
+import java.util.concurrent.TimeUnit;
 import java.util.function.BiFunction;
 
 import com.google.common.collect.Lists;
@@ -438,7 +439,7 @@ public class FileSinkOperator extends TerminalOperator<FileSinkDesc> implements
   protected transient boolean bDynParts;
   private transient SubStructObjectInspector subSetOI;
   private transient int timeOut; // JT timeout in msec.
-  private transient long lastProgressReport = System.currentTimeMillis();
+  private transient long lastProgressReport = System.nanoTime();
 
   protected transient boolean autoDelete = false;
   protected transient JobConf jc;
@@ -875,9 +876,9 @@ public class FileSinkOperator extends TerminalOperator<FileSinkDesc> implements
    */
   protected boolean updateProgress() {
     if (reporter != null &&
-        (System.currentTimeMillis() - lastProgressReport) > timeOut) {
+        (System.nanoTime() - lastProgressReport) > TimeUnit.MILLISECONDS.toNanos(timeOut)) {
       reporter.progress();
-      lastProgressReport = System.currentTimeMillis();
+      lastProgressReport = System.nanoTime();
       return true;
     } else {
       return false;
@@ -1270,7 +1271,7 @@ public class FileSinkOperator extends TerminalOperator<FileSinkDesc> implements
       }
     }
 
-    lastProgressReport = System.currentTimeMillis();
+    lastProgressReport = System.nanoTime();
     if (!abort) {
       // If serializer is ThriftJDBCBinarySerDe, then it buffers rows to a certain limit (hive.server2.thrift.resultset.max.fetch.size)
       // and serializes the whole batch when the buffer is full. The serialize returns null if the buffer is not full

@@ -36,6 +36,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.TimeUnit;
 
 import org.apache.commons.lang.StringUtils;
 import org.apache.hadoop.conf.Configuration;
@@ -238,7 +239,7 @@ public class CliDriver {
       if (proc instanceof IDriver) {
         IDriver qp = (IDriver) proc;
         PrintStream out = ss.out;
-        long start = System.currentTimeMillis();
+        final long startTime = System.nanoTime();
         if (ss.getIsVerbose()) {
           out.println(cmd);
         }
@@ -254,8 +255,7 @@ public class CliDriver {
         }
 
         // query has run capture the time
-        long end = System.currentTimeMillis();
-        double timeTaken = (end - start) / 1000.0;
+        final long estimatedTime = System.nanoTime() - startTime;
 
         ArrayList<String> res = new ArrayList<String>();
 
@@ -293,7 +293,8 @@ public class CliDriver {
           }
 
           console.printInfo(
-              "Time taken: " + timeTaken + " seconds" + (counter == 0 ? "" : ", Fetched: " + counter + " row(s)"));
+              "Time taken: " + TimeUnit.NANOSECONDS.toSeconds(estimatedTime) + " seconds"
+                  + (counter == 0 ? "" : ", Fetched: " + counter + " row(s)"));
         }
       } else {
         String firstToken = tokenizeCmd(cmd.trim())[0];

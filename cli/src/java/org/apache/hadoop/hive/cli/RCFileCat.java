@@ -28,6 +28,7 @@ import java.nio.ByteBuffer;
 import java.nio.charset.Charset;
 import java.nio.charset.CharsetDecoder;
 import java.nio.charset.CodingErrorAction;
+import java.util.concurrent.TimeUnit;
 
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
@@ -75,7 +76,7 @@ public class RCFileCat implements Tool{
     long start = 0l;
     long length = -1l;
     int recordCount = 0;
-    long startT = System.currentTimeMillis();
+    final long startTime = System.nanoTime();
     boolean verbose = false;
     boolean columnSizes = false;
     boolean pretty = false;
@@ -189,12 +190,12 @@ public class RCFileCat implements Tool{
       printRecord(value, buf);
       recordCount++;
       if (verbose && (recordCount % RECORD_PRINT_INTERVAL) == 0) {
-        long now = System.currentTimeMillis();
+        final long estimatedTime = System.nanoTime() - startTime;
         System.err.println("Read " + recordCount/1024 + "k records");
         System.err.println("Read " + ((recordReader.getPos() / (1024L*1024L)))
                                                                       + "MB");
-        System.err.printf("Input scan rate %.2f MB/s\n",
-                  (recordReader.getPos() * 1.0 / (now - startT)) / 1024.0);
+        System.err.printf("Input scan rate %.2f MB/s\n", (((double) recordReader.getPos() / (1024.0 * 1024.0))
+            / (double) TimeUnit.NANOSECONDS.toSeconds(estimatedTime)));
       }
       if (buf.length() > STRING_BUFFER_FLUSH_SIZE) {
         System.out.print(buf.toString());

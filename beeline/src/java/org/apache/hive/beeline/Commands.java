@@ -52,6 +52,7 @@ import java.util.Map;
 import java.util.Properties;
 import java.util.Set;
 import java.util.TreeSet;
+import java.util.concurrent.TimeUnit;
 
 import org.apache.hadoop.hive.common.cli.ShellCmdExecutor;
 import org.apache.hadoop.hive.conf.HiveConf;
@@ -448,12 +449,12 @@ public class Commands {
       return false;
     }
     try {
-      long start = System.currentTimeMillis();
+      final long startTime = System.nanoTime();
       beeLine.getDatabaseConnection().getConnection().commit();
-      long end = System.currentTimeMillis();
+      final long estimatedTime = System.nanoTime() - startTime;
       beeLine.showWarnings();
       beeLine.info(beeLine.loc("commit-complete")
-          + " " + beeLine.locElapsedTime(end - start));
+          + " " + beeLine.locElapsedTime(TimeUnit.NANOSECONDS.toMillis(estimatedTime)));
       return true;
     } catch (Exception e) {
       return beeLine.error(e);
@@ -469,12 +470,12 @@ public class Commands {
       return false;
     }
     try {
-      long start = System.currentTimeMillis();
+      final long startTime = System.nanoTime();
       beeLine.getDatabaseConnection().getConnection().rollback();
-      long end = System.currentTimeMillis();
+      final long estimatedTime = System.nanoTime() - startTime;
       beeLine.showWarnings();
       beeLine.info(beeLine.loc("rollback-complete")
-          + " " + beeLine.locElapsedTime(end - start));
+          + " " + beeLine.locElapsedTime(TimeUnit.NANOSECONDS.toMillis(estimatedTime)));
       return true;
     } catch (Exception e) {
       return beeLine.error(e);
@@ -978,7 +979,7 @@ public class Commands {
       Thread logThread = null;
 
       try {
-        long start = System.currentTimeMillis();
+        final long startTime = System.nanoTime();
 
         if (call) {
           stmnt = beeLine.getDatabaseConnection().getConnection().prepareCall(sql);
@@ -1024,10 +1025,12 @@ public class Commands {
             ResultSet rs = stmnt.getResultSet();
             try {
               int count = beeLine.print(rs);
-              long end = System.currentTimeMillis();
+              final long estimatedTime = System.nanoTime() - startTime;
 
               if (showReport()) {
-                beeLine.output(beeLine.loc("rows-selected", count) + " " + beeLine.locElapsedTime(end - start),
+                beeLine.output(
+                    beeLine.loc("rows-selected", count) + " "
+                        + beeLine.locElapsedTime(TimeUnit.NANOSECONDS.toMillis(estimatedTime)),
                     true, beeLine.getErrorStream());
               }
             } finally {
@@ -1044,10 +1047,12 @@ public class Commands {
           }
         } else {
           int count = stmnt.getUpdateCount();
-          long end = System.currentTimeMillis();
+          final long estimatedTime = System.nanoTime() - startTime;
 
           if (showReport()) {
-            beeLine.output(beeLine.loc("rows-affected", count) + " " + beeLine.locElapsedTime(end - start),
+            beeLine.output(
+                beeLine.loc("rows-affected", count) + " "
+                    + beeLine.locElapsedTime(TimeUnit.NANOSECONDS.toMillis(estimatedTime)),
                 true, beeLine.getErrorStream());
           }
         }

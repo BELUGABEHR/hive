@@ -677,9 +677,9 @@ public class ScriptOperator extends Operator<ScriptDesc> implements
 
       // Report progress for each stderr line, but no more frequently than once
       // per minute.
-      long now = System.currentTimeMillis();
+      final long now = System.nanoTime();
       // reporter is a member variable of the Operator class.
-      if (now - lastReportTime > 60 * 1000 && reporter != null) {
+      if (now - lastReportTime > TimeUnit.MINUTES.toNanos(1L) && reporter != null) {
         if (LOG.isInfoEnabled()) {
           LOG.info("ErrorStreamProcessor calling reporter.progress()");
         }

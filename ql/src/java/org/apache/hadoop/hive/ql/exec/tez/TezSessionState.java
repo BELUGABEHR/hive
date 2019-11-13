@@ -858,11 +858,11 @@ public class TezSessionState {
       FSDataInputStream is = null;
       try {
         is = localFs.open(localFile);
-        long start = System.currentTimeMillis();
+        final long startTime = System.nanoTime();
         sha256 = DigestUtils.sha256Hex(is);
-        long end = System.currentTimeMillis();
+        final long estimatedTime = System.nanoTime() - startTime;
         LOG.info("Computed sha: {} for file: {} of length: {} in {} ms", sha256, localFile,
-          LlapUtil.humanReadableByteCount(fileStatus.getLen()), end - start);
+            LlapUtil.humanReadableByteCount(fileStatus.getLen()), TimeUnit.NANOSECONDS.toMillis(estimatedTime));
         shaCache.put(key, sha256);
       } finally {
         if (is != null) {

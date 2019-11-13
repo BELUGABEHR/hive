@@ -22,6 +22,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
+import java.util.concurrent.TimeUnit;
 
 import org.apache.commons.lang.StringUtils;
 import org.apache.hadoop.hive.common.MemoryEstimate;
@@ -800,7 +801,7 @@ public final class BytesBytesMultiHashMap implements MemoryEstimate {
   }
 
   private void expandAndRehashImpl(long capacity) {
-    long expandTime = System.currentTimeMillis();
+    final long startTime = System.nanoTime();
     final long[] oldRefs = refs;
     validateCapacity(capacity);
     long[] newRefs = new long[(int)capacity];
@@ -831,7 +832,7 @@ public final class BytesBytesMultiHashMap implements MemoryEstimate {
     this.largestNumberOfSteps = maxSteps;
     this.hashBitCount = newHashBitCount;
     this.resizeThreshold = (int)(capacity * loadFactor);
-    metricExpandsMs += (System.currentTimeMillis() - expandTime);
+    metricExpandsMs += TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startTime);
     ++metricExpands;
   }
 

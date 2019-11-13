@@ -249,7 +249,7 @@ public class ReplDumpTask extends Task<ReplDumpWork> implements Serializable {
     Long lastReplId;// get list of events matching dbPattern & tblPattern
     // go through each event, and dump out each event to a event-level dump dir inside dumproot
     String validTxnList = null;
-    long waitUntilTime = 0;
+    long waitUntilTime = 0L;
     long bootDumpBeginReplId = -1;
 
     List<String> tableList = work.replScope.includeAllTables() ? null : new ArrayList<>();
@@ -265,7 +265,7 @@ public class ReplDumpTask extends Task<ReplDumpWork> implements Serializable {
               work.dbNameOrPattern);
       long timeoutInMs = HiveConf.getTimeVar(conf,
               HiveConf.ConfVars.REPL_BOOTSTRAP_DUMP_OPEN_TXN_TIMEOUT, TimeUnit.MILLISECONDS);
-      waitUntilTime = System.currentTimeMillis() + timeoutInMs;
+      waitUntilTime = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutInMs);
     }
 
     // TODO : instead of simply restricting by message format, we should eventually
@@ -324,7 +324,6 @@ public class ReplDumpTask extends Task<ReplDumpWork> implements Serializable {
     if (shouldExamineTablesToDump() || (tableList != null)) {
       // If required wait more for any transactions open at the time of starting the ACID bootstrap.
       if (needBootstrapAcidTablesDuringIncrementalDump()) {
-        assert (waitUntilTime > 0);
         validTxnList = getValidTxnListForReplDump(hiveDb, waitUntilTime);
       }
 
@@ -624,7 +623,7 @@ public class ReplDumpTask extends Task<ReplDumpWork> implements Serializable {
     // of time to see if all open txns < current txn is getting aborted/committed. If not, then
     // we forcefully abort those txns just like AcidHouseKeeperService.
     ValidTxnList validTxnList = getTxnMgr().getValidTxns();
-    while (System.currentTimeMillis() < waitUntilTime) {
+    while ((System.nanoTime() - waitUntilTime) > 0) {
       // If there are no txns which are open for the given ValidTxnList snapshot, then just return it.
       if (getOpenTxns(validTxnList).isEmpty()) {
         return validTxnList.toString();

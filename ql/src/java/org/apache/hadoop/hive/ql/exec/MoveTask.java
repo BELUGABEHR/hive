@@ -76,6 +76,7 @@ import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
 
 /**
  * MoveTask implementation.
@@ -549,7 +550,7 @@ public class MoveTask extends Task<MoveWork> implements Serializable {
     List<LinkedHashMap<String, String>> dps = Utilities.getFullDPSpecs(conf, dpCtx);
 
     console.printInfo(System.getProperty("line.separator"));
-    long startTime = System.currentTimeMillis();
+    final long loadPartitionsStartTime = System.nanoTime();
     // load the list of DP partitions and return the list of partition specs
     // TODO: In a follow-up to HIVE-1361, we should refactor loadDynamicPartitions
     // to use Utilities.getFullDPSpecs() to get the list of full partSpecs.
@@ -578,8 +579,9 @@ public class MoveTask extends Task<MoveWork> implements Serializable {
       pushFeed(FeedType.DYNAMIC_PARTITIONS, dp.values());
     }
 
+    final long estimatedLoadPartitionTime = System.nanoTime() - loadPartitionsStartTime;
     String loadTime = "\t Time taken to load dynamic partitions: "  +
-        (System.currentTimeMillis() - startTime)/1000.0 + " seconds";
+        TimeUnit.NANOSECONDS.toSeconds(estimatedLoadPartitionTime) + " seconds";
     console.printInfo(loadTime);
     LOG.info(loadTime);
 
@@ -588,7 +590,7 @@ public class MoveTask extends Task<MoveWork> implements Serializable {
           " To turn off this error, set hive.error.on.empty.partition=false.");
     }
 
-    startTime = System.currentTimeMillis();
+    final long getPartitionsStartTime = System.nanoTime();
     // for each partition spec, get the partition
     // and put it to WriteEntity for post-exec hook
     for(Map.Entry<Map<String, String>, Partition> entry : dp.entrySet()) {
@@ -626,8 +628,10 @@ public class MoveTask extends Task<MoveWork> implements Serializable {
       }
       LOG.info("Loading partition " + entry.getKey());
     }
+
+    final long estimatedGetPartitionTime = System.nanoTime() - getPartitionsStartTime;
     console.printInfo("\t Time taken for adding to write entity : " +
-        (System.currentTimeMillis() - startTime)/1000.0 + " seconds");
+        TimeUnit.NANOSECONDS.toSeconds(estimatedGetPartitionTime) + " seconds");
     dc = null; // reset data container to prevent it being added again.
     return dc;
   }

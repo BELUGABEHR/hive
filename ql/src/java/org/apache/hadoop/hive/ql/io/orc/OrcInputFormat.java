@@ -2006,7 +2006,7 @@ public class OrcInputFormat implements InputFormat<NullWritable, OrcStruct>,
   @Override
   public InputSplit[] getSplits(JobConf job,
                                 int numSplits) throws IOException {
-    long start = System.currentTimeMillis();
+    final long startTime = System.nanoTime();
     LOG.info("getSplits started");
     Configuration conf = job;
     if (HiveConf.getBoolVar(job, HiveConf.ConfVars.HIVE_ORC_MS_FOOTER_CACHE_ENABLED)) {
@@ -2015,8 +2015,9 @@ public class OrcInputFormat implements InputFormat<NullWritable, OrcStruct>,
     }
     List<OrcSplit> result = generateSplitsInfo(conf,
         new Context(conf, numSplits, createExternalCaches()));
-    long end = System.currentTimeMillis();
-    LOG.info("getSplits finished (#splits: {}). duration: {} ms", result.size(), (end - start));
+    final long estimatedTime = System.nanoTime() - startTime;
+    LOG.info("getSplits finished (#splits: {}). duration: {} ms", result.size(),
+        TimeUnit.NANOSECONDS.toMillis(estimatedTime));
     return result.toArray(new InputSplit[result.size()]);
   }
 

@@ -22,6 +22,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.TimeUnit;
 
 import org.apache.hadoop.hive.ql.exec.CommonJoinOperator;
 import org.apache.hadoop.hive.ql.exec.FilterOperator;
@@ -89,7 +90,7 @@ public class Generator extends Transform {
       index = new Index();
     }
 
-    long sTime = System.currentTimeMillis();
+    final long startTime = System.nanoTime();
     // Create the lineage context
     LineageCtx lCtx = new LineageCtx(pctx, index);
 
@@ -127,7 +128,11 @@ public class Generator extends Transform {
     topNodes.addAll(pctx.getTopOps().values());
     ogw.startWalking(topNodes, null);
 
-    LOG.debug("Time taken for lineage transform={}", (System.currentTimeMillis() - sTime));
+    if (LOG.isDebugEnabled()) {
+      final long estimatedTime = System.nanoTime() - startTime;
+      LOG.debug("Time taken for lineage transform={}ms", TimeUnit.NANOSECONDS.toMillis(estimatedTime));
+    }
+
     return pctx;
   }
 
