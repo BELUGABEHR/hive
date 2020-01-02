@@ -18,6 +18,7 @@
 
 package org.apache.hadoop.hive.common.format.datetime;
 
+import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import org.apache.commons.lang.StringUtils;
@@ -45,6 +46,8 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
+import java.util.Optional;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -399,12 +402,15 @@ public class HiveSqlDateTimeFormatter implements Serializable {
   private static final int LONGEST_TOKEN_LENGTH = 5;
   private static final int LONGEST_ACCEPTED_PATTERN = 100; // for sanity's sake
   private static final int NANOS_MAX_LENGTH = 9;
+  private static final DateTimeFormatter MONTH_FORMATTER = DateTimeFormatter.ofPattern("MMM");
+
   public static final int AM = 0;
   public static final int PM = 1;
-  private static final DateTimeFormatter MONTH_FORMATTER = DateTimeFormatter.ofPattern("MMM");
   public static final DateTimeFormatter DAY_OF_WEEK_FORMATTER = DateTimeFormatter.ofPattern("EEE");
-  private String pattern;
-  private List<Token> tokens = new ArrayList<>();
+
+  private final String pattern;
+  private final List<Token> tokens;
+  private final Optional<LocalDateTime> now;
   private boolean formatExact = false;
 
   private static final Map<String, TemporalField> NUMERIC_TEMPORAL_TOKENS =
@@ -536,20 +542,38 @@ public class HiveSqlDateTimeFormatter implements Serializable {
     }
   }
 
-  public HiveSqlDateTimeFormatter(String pattern, boolean forParsing) {
-    setPattern(pattern, forParsing);
+  /**
+   * Construct a new instance.
+   *
+   * @param pattern Pattern to use for parsing or formatting
+   * @param forParsing Flag to indicate use of pattern
+   * @throws IllegalArgumentException if pattern is invalid
+   */
+  public HiveSqlDateTimeFormatter(final String pattern, final boolean forParsing) {
+    this(pattern, forParsing, Optional.empty());
   }
 
   /**
-   * Parse and perhaps verify the pattern.
+   * Construct a new instance. An optional LocalDateTime can be provided when
+   * parsing must populate a field provided in the format string does not
+   * specify the date and time to use. If none is provided, the current
+   * {@link LocalDateTime#now()} will be used for each call to parse and format.
+   *
+   * @param pattern Pattern to use for parsing or formatting
+   * @param forParsing Flag to indicate use of pattern
+   * @param now Set an arbitrary context of the current local time
+   * @throws IllegalArgumentException if pattern is invalid
    */
-  private void setPattern(String pattern, boolean forParsing) {
-    assert pattern.length() < LONGEST_ACCEPTED_PATTERN : "The input format is too long";
-    this.pattern = pattern;
+  public HiveSqlDateTimeFormatter(final String pattern, final boolean forParsing, final Optional<LocalDateTime> now) {
+    this.pattern = Objects.requireNonNull(pattern, "Pattern cannot be null");
+    this.now = Objects.requireNonNull(now);
+
+    this.tokens = new ArrayList<>();
+
+    Preconditions.checkArgument(pattern.length() < LONGEST_ACCEPTED_PATTERN, "The input format is too long");
 
     parsePatternToTokens(pattern);
 
-    // throw IllegalArgumentException if pattern is invalid
     if (forParsing) {
       verifyForParse();
     } else {
@@ -759,8 +783,8 @@ public class HiveSqlDateTimeFormatter implements Serializable {
   private void verifyForParse() {
 
     // create a list of tokens' temporal fields
-    ArrayList<TemporalField> temporalFields = new ArrayList<>();
-    ArrayList<TemporalUnit> timeZoneTemporalUnits = new ArrayList<>();
+    List<TemporalField> temporalFields = new ArrayList<>();
+    List<TemporalUnit> timeZoneTemporalUnits = new ArrayList<>();
     int roundYearCount=0, yearCount=0;
     boolean containsIsoFields=false, containsGregorianFields=false;
     for (Token token : tokens) {
@@ -828,7 +852,7 @@ public class HiveSqlDateTimeFormatter implements Serializable {
     for (TemporalField tokenType : temporalFields) {
       if (Collections.frequency(temporalFields, tokenType) > 1) {
         throw new IllegalArgumentException(
-            "Invalid duplication of format element: multiple " + tokenType.toString()
+            "Invalid duplication of format element: multiple " + tokenType
                 + " tokens provided.");
       }
     }
@@ -934,10 +958,10 @@ public class HiveSqlDateTimeFormatter implements Serializable {
         value = 12;
       }
       try {
-        output = String.valueOf(value);
+        output = Integer.toString(value);
         output = padOrTruncateNumericTemporal(token, output);
       } catch (Exception e) {
-        throw new IllegalArgumentException("Value: " + value + " couldn't be cast to string.", e);
+        throw new IllegalArgumentException("Value: " + value + " could not be cast to string.", e);
       }
     }
     return output;
@@ -1009,7 +1033,7 @@ public class HiveSqlDateTimeFormatter implements Serializable {
     return output;
   }
 
-  public Timestamp parseTimestamp(String fullInput){
+  public Timestamp parseTimestamp(final String fullInput) {
     LocalDateTime ldt = LocalDateTime.ofInstant(Instant.EPOCH, ZoneOffset.UTC);
     String substring;
     int index = 0;
@@ -1032,7 +1056,7 @@ public class HiveSqlDateTimeFormatter implements Serializable {
           ldt = ldt.with(token.temporalField, value);
         } catch (DateTimeException e){
           throw new IllegalArgumentException(
-              "Value " + value + " not valid for token " + token.toString());
+              "Value " + value + " not valid for token " + token);
         }
 
         //update IYYY and IW if necessary
@@ -1159,7 +1183,7 @@ public class HiveSqlDateTimeFormatter implements Serializable {
   /**
    * Get the integer value of a temporal substring.
    */
-  private int parseNumericTemporal(String substring, Token token){
+  private int parseNumericTemporal(String substring, Token token) {
     checkFormatExact(substring, token);
 
     // exceptions to the rule
@@ -1174,9 +1198,9 @@ public class HiveSqlDateTimeFormatter implements Serializable {
 
       String currentYearString;
       if (token.temporalField == ChronoField.YEAR) {
-        currentYearString = String.valueOf(LocalDateTime.now().getYear());
+        currentYearString = Integer.toString(this.now.orElse(LocalDateTime.now()).getYear());
       } else {
-        currentYearString =  String.valueOf(LocalDateTime.now().get(IsoFields.WEEK_BASED_YEAR));
+        currentYearString = Integer.toString(this.now.orElse(LocalDateTime.now()).get(IsoFields.WEEK_BASED_YEAR));
       }
 
       //deal with round years
@@ -1189,7 +1213,7 @@ public class HiveSqlDateTimeFormatter implements Serializable {
         } else if (valLast2Digits >= 50 && currLast2Digits < 50) {
           currFirst2Digits -= 1;
         }
-        substring = String.valueOf(currFirst2Digits) + substring;
+        substring = Integer.toString(currFirst2Digits) + substring;
       } else { // fill in prefix digits with current date
         substring = currentYearString.substring(0, 4 - substring.length()) + substring;
       }
@@ -1291,7 +1315,7 @@ public class HiveSqlDateTimeFormatter implements Serializable {
         && !(token.fillMode || token.temporalField == ChronoField.NANO_OF_SECOND)
         && token.length != substring.length()) {
       throw new IllegalArgumentException(
-          "FX on and expected token length " + token.length + " for token " + token.toString()
+          "FX on and expected token length " + token.length + " for token " + token
               + " does not match substring (" + substring + ") length " + substring.length());
     }
   }
@@ -1328,8 +1352,8 @@ public class HiveSqlDateTimeFormatter implements Serializable {
       throw new IllegalArgumentException("Missing separator at index " + index);
     }
     if (formatExact && !token.string.equals(separatorsFound.toString())) {
-      throw new IllegalArgumentException("FX on and separator found: " + separatorsFound.toString()
-          + " doesn't match expected separator: " + token.string);
+      throw new IllegalArgumentException("FX on and separator found: " + separatorsFound
+          + " does not match expected separator: " + token.string);
     }
 
     return begin + separatorsFound.length();
@@ -1361,10 +1385,11 @@ public class HiveSqlDateTimeFormatter implements Serializable {
    */
   private boolean nextTokenIs(String pattern, Token currentToken) {
     // make sure currentToken isn't the last one
-    if (tokens.indexOf(currentToken) == tokens.size() - 1) {
+    final int idx = tokens.indexOf(currentToken);
+    if (idx == tokens.size() - 1) {
       return false;
     }
-    Token nextToken = tokens.get(tokens.indexOf(currentToken) + 1);
+    Token nextToken = tokens.get(idx + 1);
     pattern = pattern.toLowerCase();
     return (isTimeZoneToken(pattern) && TIME_ZONE_TOKENS.get(pattern) == nextToken.temporalUnit
         || isNumericTemporalToken(pattern) && NUMERIC_TEMPORAL_TOKENS.get(pattern) == nextToken.temporalField
