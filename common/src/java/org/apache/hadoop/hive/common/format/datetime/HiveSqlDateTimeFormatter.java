@@ -18,6 +18,8 @@
 
 package org.apache.hadoop.hive.common.format.datetime;
 
+import com.google.common.annotations.VisibleForTesting;
+import com.google.common.base.Optional;
 import com.google.common.base.Preconditions;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
@@ -47,7 +49,6 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
-import java.util.Optional;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -399,6 +400,8 @@ import java.util.regex.Pattern;
 
 public class HiveSqlDateTimeFormatter implements Serializable {
 
+  private static final long serialVersionUID = 1L;
+
   private static final int LONGEST_TOKEN_LENGTH = 5;
   private static final int LONGEST_ACCEPTED_PATTERN = 100; // for sanity's sake
   private static final int NANOS_MAX_LENGTH = 9;
@@ -491,6 +494,9 @@ public class HiveSqlDateTimeFormatter implements Serializable {
    * Token representation.
    */
   public static class Token implements Serializable {
+
+    private static final long serialVersionUID = 1L;
+
     TokenType type;
     TemporalField temporalField; // for type TEMPORAL e.g. ChronoField.YEAR
     TemporalUnit temporalUnit; // for type TIMEZONE e.g. ChronoUnit.HOURS
@@ -550,7 +556,7 @@ public class HiveSqlDateTimeFormatter implements Serializable {
    * @throws IllegalArgumentException if pattern is invalid
    */
   public HiveSqlDateTimeFormatter(final String pattern, final boolean forParsing) {
-    this(pattern, forParsing, Optional.empty());
+    this(pattern, forParsing, Optional.absent());
   }
 
   /**
@@ -564,7 +570,8 @@ public class HiveSqlDateTimeFormatter implements Serializable {
    * @param now Set an arbitrary context of the current local time
    * @throws IllegalArgumentException if pattern is invalid
    */
-  public HiveSqlDateTimeFormatter(final String pattern, final boolean forParsing, final Optional<LocalDateTime> now) {
+  @VisibleForTesting
+  HiveSqlDateTimeFormatter(final String pattern, final boolean forParsing, final Optional<LocalDateTime> now) {
     this.pattern = Objects.requireNonNull(pattern, "Pattern cannot be null");
     this.now = Objects.requireNonNull(now);
 
@@ -1038,7 +1045,7 @@ public class HiveSqlDateTimeFormatter implements Serializable {
     String substring;
     int index = 0;
     int value;
-    int timeZoneSign = 0, timeZoneHours = 0, timeZoneMinutes = 0;
+    int timeZoneHours = 0, timeZoneMinutes = 0;
     int iyyy = 0, iw = 0;
 
     for (Token token : tokens) {
@@ -1072,7 +1079,6 @@ public class HiveSqlDateTimeFormatter implements Serializable {
       case TIMEZONE:
         if (token.temporalUnit == ChronoUnit.HOURS) {
           String nextCharacter = fullInput.substring(index, index + 1);
-          timeZoneSign = "-".equals(nextCharacter) ? -1 : 1;
           if ("-".equals(nextCharacter) || "+".equals(nextCharacter)) {
             index++;
           }
@@ -1198,9 +1204,9 @@ public class HiveSqlDateTimeFormatter implements Serializable {
 
       String currentYearString;
       if (token.temporalField == ChronoField.YEAR) {
-        currentYearString = Integer.toString(this.now.orElse(LocalDateTime.now()).getYear());
+        currentYearString = Integer.toString(this.now.or(LocalDateTime.now()).getYear());
       } else {
-        currentYearString = Integer.toString(this.now.orElse(LocalDateTime.now()).get(IsoFields.WEEK_BASED_YEAR));
+        currentYearString = Integer.toString(this.now.or(LocalDateTime.now()).get(IsoFields.WEEK_BASED_YEAR));
       }
 
       //deal with round years

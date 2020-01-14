@@ -28,11 +28,12 @@ import java.time.temporal.ChronoField;
 import java.time.temporal.TemporalField;
 import java.util.Arrays;
 import java.util.List;
-import java.util.Optional;
 
 import org.apache.hadoop.hive.common.type.Date;
 import org.apache.hadoop.hive.common.type.Timestamp;
 import org.junit.Test;
+
+import com.google.common.base.Optional;
 
 /**
  * Tests HiveSqlDateTimeFormatter.
